@@ -36,14 +36,14 @@ void decimateMesh(MyMesh& mesh) {
 }
 
 void quantizeVertex(MyMesh::Point& point, float quantizationLevel) {
-    // 각 좌표를 퀀타이제이션 레벨에 따라 반올림합니다.
+    
     point[0] = std::floor(point[0] / quantizationLevel + 0.5) * quantizationLevel;
     point[1] = std::floor(point[1] / quantizationLevel + 0.5) * quantizationLevel;
     point[2] = std::floor(point[2] / quantizationLevel + 0.5) * quantizationLevel;
 }
 
 void quantizeSubMesh(MyMesh& submesh, float quantizationLevel) {
-    // 모든 정점을 순회하면서 각 정점의 좌표를 퀀타이제이션합니다.
+    
     for (auto v_it = submesh.vertices_begin(); v_it != submesh.vertices_end(); ++v_it) {
         auto& point = submesh.point(*v_it);
         quantizeVertex(point, quantizationLevel);
@@ -62,13 +62,20 @@ int main() {
     std::vector<int> vertexCellIndices(mesh.n_vertices());
 
     int idx = 0;
-    for (MyMesh::VertexIter v_it = mesh.vertices_begin(); v_it != mesh.vertices_end(); ++v_it) {
+    for (MyMesh::VertexIter v_it = mesh.vertices_begin(); v_it != mesh.vertices_end(); ++v_it) 
+    {
         OpenMesh::Vec3f position = mesh.point(*v_it);
         vertexCellIndices[idx++] = determineGridCell(position, grid);
     }
 
+    for (int cellIndex : vertexCellIndices) 
+    {
+        std::cout << "Vertex is in cell: " << cellIndex << std::endl;
+    }
+
     #pragma omp parallel for
-    for (int i = 0; i < grid.dimX * grid.dimY * grid.dimZ; ++i) {
+    for (int i = 0; i < grid.dimX * grid.dimY * grid.dimZ; ++i) 
+    {
         MyMesh submesh = extractSubMesh(mesh, grid, i); 
         decimateMesh(submesh);
         quantizeSubMesh(submesh, quantizationLevel);
@@ -77,10 +84,5 @@ int main() {
         
         
     }
-
-    for (int cellIndex : vertexCellIndices) {
-        std::cout << "Vertex is in cell: " << cellIndex << std::endl;
-    }
-
     return 0;
 }
