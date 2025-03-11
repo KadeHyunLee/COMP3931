@@ -3,6 +3,7 @@
 #include <OpenMesh/Tools/Decimater/DecimaterT.hh>
 #include <OpenMesh/Tools/Decimater/ModQuadricT.hh>
 #include <iostream>
+#include <unordered_set>
 
 using std::cout;
 using std::cerr;
@@ -110,7 +111,7 @@ float calculateOptimalGridSize(const MyMesh& mesh) {
                      maxBounds[2] - minBounds[2]) / 3.0f;
     
     // Calculate the average isze across all three axes
-    float gridSize = avgSize * 0.05f;  
+    float gridSize = avgSize * 0.1f;  
     std::cout << "[Debug] Auto-Calculated Grid Size: " << gridSize << "\n";
 
     return gridSize;
@@ -185,6 +186,7 @@ void extractSubMeshes(const MyMesh& original,
         }
 
         // Track how many faces are added for this submesh
+        bool encounteredError = false;
         int faceAddCount = 0;
 
         for (const auto& v : vertices) {
@@ -196,28 +198,76 @@ void extractSubMeshes(const MyMesh& original,
                 std::vector<MyMesh::VertexHandle> face_vhandles;
                 // Flag to check if all vertices are inside vhandleMap
                 bool validFace = true;
-                
-                // Iterate over vertices of face
+                std::unordered_set<int> uniqueVerts; // to track uniqueness of vertex handles
+
                 for (MyMesh::ConstFaceVertexIter fv_it = original.cfv_iter(face); fv_it.is_valid(); ++fv_it) {
-                    // If the vertex is in the submesh, add the new vertex
-                    if (vhandleMap.find(*fv_it) != vhandleMap.end()) {
-                        face_vhandles.push_back(vhandleMap[*fv_it]);
-                    } else {
-                        // At least one vertex is missing in this submesh, skip the face
+                    auto vh = *fv_it;
+                    if (vhandleMap.find(vh) == vhandleMap.end()) {
                         validFace = false;
-                        break;
+                        break; // at least one vertex isn't mapped to this submesh
                     }
+
+                    auto mapped_vh = vhandleMap[vh];
+                    face_vhandles.push_back(mapped_vh);
+                    uniqueVerts.insert(mapped_vh.idx());
                 }
-                // If all vertices are vaild, and it can be triangle
-                if (validFace && face_vhandles.size() == 3) {
-                    // Add face to submesh
-                    MyMesh::FaceHandle newFace = submesh.add_face(face_vhandles);
-                    if (newFace.is_valid()) {
-                        faceAddCount++;
+
+                // Reject invalid or degenerate faces
+                if (!validFace || face_vhandles.size() != 3 || uniqueVerts.size() != 3) {
+                    std::cerr << "[Warning] Invalid or degenerate face detected in Grid ("
+                              << gridIdx.x << ", " << gridIdx.y << ", " << gridIdx.z << "). "
+                              << "Face vertices count: " << face_vhandles.size() 
+                              << ", Unique vertices: " << uniqueVerts.size() << "\n";
+                    continue;
+                }
+
+                // Check for small triangle area
+                auto p0 = submesh.point(face_vhandles[0]);
+                auto p1 = submesh.point(face_vhandles[1]);
+                auto p2 = submesh.point(face_vhandles[2]);
+                
+                OpenMesh::Vec3f v1 = p1 - p0;
+                OpenMesh::Vec3f v2 = p2 - p0;
+                
+                OpenMesh::Vec3f cross = OpenMesh::cross(v1, v2);
+                float area = cross.norm() * 0.5f;
+                
+                if (area < 1e-8f) {  // Skip tiny triangles
+                    std::cerr << "[Warning] Skipping face in Grid (" 
+                              << gridIdx.x << ", " << gridIdx.y << ", " << gridIdx.z
+                              << ") due to small area: " << area << "\n";
+                    continue;
+                }
+                
+                // Add face to submesh
+                MyMesh::FaceHandle newFace = submesh.add_face(face_vhandles);
+                if (!newFace.is_valid()) {
+                    std::cerr << "[Error] Failed to add face in Grid ("
+                              << gridIdx.x << ", " << gridIdx.y << ", " << gridIdx.z << "). "
+                              << "Face vertices: ";
+                    for (const auto& vh : face_vhandles) {
+                        std::cerr << vh.idx() << " ";
                     }
+                    std::cerr << "\n";
+                    std::cerr << "[Debug] Vertex positions in submesh for failed face:\n";
+                    for (const auto& vh : face_vhandles) {
+                        auto pt = submesh.point(vh);
+                        std::cerr << " - Vertex " << vh.idx() << ": (" 
+                                  << pt[0] << ", " << pt[1] << ", " << pt[2] << ")\n";
+                    }
+                    //encounteredError = true;
+                    //break;
+                } else {
+                    faceAddCount++;
                 }
             }
-            }
+        }
+
+        if (encounteredError) {
+            std::cerr << "[Abort] Stopping submesh extraction for Grid ("
+                      << gridIdx.x << ", " << gridIdx.y << ", " << gridIdx.z << ") due to error.\n";
+            break;
+        }
 
         std::cout << "[Debug] Submesh for Grid (" << gridIdx.x << ", " << gridIdx.y << ", " << gridIdx.z
                   << ") -> " << submesh.n_vertices() << " vertices, " 
