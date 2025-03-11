@@ -3,10 +3,10 @@
 #include <unordered_map>
 #include <string>
 
-// 메시 타입 정의
+// Mesh type definition
 typedef OpenMesh::TriMesh_ArrayKernelT<> MyMesh;
 
-// 3D 그리드 인덱스 구조체
+// 3D grid index struct
 struct GridIndex {
     int x, y, z;
     bool operator==(const GridIndex& other) const {
@@ -14,7 +14,7 @@ struct GridIndex {
     }
 };
 
-// 해시 함수 정의 (unordered_map에서 사용하기 위함)
+// Hash function definitions (for use with unordered_map)
 namespace std {
     template<> struct hash<GridIndex> {
         size_t operator()(const GridIndex& g) const {
@@ -23,6 +23,7 @@ namespace std {
     };
 
     template <>
+    // Hash function for OpenMesh::Vec3f
     struct hash<OpenMesh::Vec3f> {
         size_t operator()(const OpenMesh::Vec3f& v) const noexcept {
             size_t h1 = hash<float>()(v[0]);
@@ -33,35 +34,35 @@ namespace std {
     };
 }
 
-// 🟢 메시 불러오기 함수 선언
+// Function to load mesh from file
 bool loadMesh(const std::string& filename, MyMesh& mesh);
 
-// 🟢 정점 좌표를 그리드 인덱스로 변환하는 함수 선언
+// Convert vertex position to grid index
 GridIndex computeGridIndex(const OpenMesh::Vec3f& point, float gridSize);
 
-// 🟢 메시의 정점을 그리드에 매핑하는 함수 선언
+// Map mesh vertices to grid cells
 void mapVerticesToGrid(const MyMesh& mesh, std::unordered_map<GridIndex, std::vector<MyMesh::VertexHandle>>& gridMap, float gridSize);
 
+// Automatically calculate an optimal grid size based on mesh dimensions
 float calculateOptimalGridSize(const MyMesh& mesh);
 
-void removeEmptyGrids(std::unordered_map<GridIndex, std::vector<MyMesh::VertexHandle>>& gridMap, 
-                      const MyMesh& mesh, int minThreshold);
+// Remove grids that have fewer vertices than a given threshold or no connected faces
+//void removeEmptyGrids(std::unordered_map<GridIndex, std::vector<MyMesh::VertexHandle>>& gridMap, 
+//                     const MyMesh& mesh, int minThreshold);
 
-// 서브메쉬 추출
+// Extract submeshes from original mesh
 void extractSubMeshes(const MyMesh& original, 
     const std::unordered_map<GridIndex, std::vector<MyMesh::VertexHandle>>& gridMap, 
     std::unordered_map<GridIndex, MyMesh>& subMeshes,
     std::unordered_map<GridIndex, MyMesh>& emptySubMeshes); 
 
-// 🟢 서브메쉬 Decimation 함수 선언
+// Perform decimation on submeshes to reduce face count and optimize geometry
 void decimateSubMeshes(std::unordered_map<GridIndex, MyMesh>& subMeshes);
 
+// Integrate all submeshes into a single final mesh (optionally excluding fixed submeshes)
 void integrateSubMeshes(const std::unordered_map<GridIndex, MyMesh>& subMeshes, 
     MyMesh& finalMesh, 
     const std::unordered_map<GridIndex, MyMesh>& emptySubMeshes, 
     const std::unordered_map<GridIndex, MyMesh>& fixedSubMeshes);
-
-void integrateFixedSubMeshes(const std::unordered_map<GridIndex, MyMesh>& fixedSubMeshes, 
-    MyMesh& finalMesh_fixed);
 
 #endif // MESHUTILS_H

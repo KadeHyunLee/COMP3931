@@ -8,46 +8,59 @@ using std::cout;
 using std::cerr;
 using std::endl;
 
-// 🟢 메시 파일을 로드하는 함수 구현
+// Function to load a mesh from the given file into the provided mesh object.
+// Returns true if the mesh is successfully loaded, false otherwise.
 bool loadMesh(const std::string& filename, MyMesh& mesh) {
+    // Attempt to read the mesh from the given filename and load it 
     if (!OpenMesh::IO::read_mesh(mesh, filename)) {
         std::cerr << "[Error] Failed to load mesh: " << filename << "\n";
+        std::cerr << "[Debug] Please check the file path and format. Supported formats include: .obj, .ply, .stl\n";
+        // Return false if file was not load
         return false;
     }
     std::cout << "[Debug] Loaded mesh: " << filename << " with "
               << mesh.n_vertices() << " vertices and "
               << mesh.n_faces() << " faces.\n";
+    // Return true to indicate successful loading.
     return true;
 }
 
-// 🟢 그리드 인덱스 계산
+// The point is divided by the grid cell size to determine which cell it belongs to.
 GridIndex computeGridIndex(const OpenMesh::Vec3f& point, float gridSize) {
-    return { 
-        static_cast<int>(point[0] / gridSize), 
-        static_cast<int>(point[1] / gridSize), 
-        static_cast<int>(point[2] / gridSize) 
+    GridIndex idx {
+        static_cast<int>(point[0] / gridSize),// Compute grid index along X-axis
+        static_cast<int>(point[1] / gridSize),// Compute grid index along Y-axis
+        static_cast<int>(point[2] / gridSize)// Compute grid index along Z-axis
     };
+    /*std::cout << "[Debug] Computed GridIndex(" << idx.x << ", " << idx.y << ", " << idx.z
+              << ") from point (" << point[0] << ", " << point[1] << ", " << point[2]
+              << ") with gridSize " << gridSize << "\n";
+              */
+    return idx;
 }
 
-// 🟢 정점을 그리드에 매핑하는 함수
+// Function to map each vertex of the mesh into its corresponding grid cell.
 void mapVerticesToGrid(const MyMesh& mesh, std::unordered_map<GridIndex, std::vector<MyMesh::VertexHandle>>& gridMap, float gridSize) {
     std::cout << "[Debug] Mapping vertices to grid...\n";
+    std::cout << "[Debug] Total vertices in mesh: " << mesh.n_vertices() << "\n";
 
+    // Initialize min and max indices to track the range of grid cells used
     int minIdxX = INT_MAX, minIdxY = INT_MAX, minIdxZ = INT_MAX;
     int maxIdxX = INT_MIN, maxIdxY = INT_MIN, maxIdxZ = INT_MIN;
 
+    // Iterate over each vertex in the mesh
     for (auto v_it = mesh.vertices_begin(); v_it != mesh.vertices_end(); ++v_it) {
+        // Get 3D Position of the current vertex
         OpenMesh::Vec3f point = mesh.point(*v_it);
+        // Compute gridcell to belong points
         GridIndex gridIdx = computeGridIndex(point, gridSize);
 
-        // 🔹 빈 그리드가 생기는 것을 방지하기 위해 체크
-        if (gridMap[gridIdx].empty()) {
-            gridMap[gridIdx] = std::vector<MyMesh::VertexHandle>();
-        }
-
+        // Add the current vertex handle to the corresponding grid cell
         gridMap[gridIdx].push_back(*v_it);
+        //std::cout << "[Debug] Added vertex handle " << (*v_it).idx()
+          //        << " to GridIndex(" << gridIdx.x << ", " << gridIdx.y << ", " << gridIdx.z << ")\n";
 
-        // 그리드 인덱스 범위 추적
+        // Track the minimum and maximum indices in X, Y, Z
         minIdxX = std::min(minIdxX, gridIdx.x);
         minIdxY = std::min(minIdxY, gridIdx.y);
         minIdxZ = std::min(minIdxZ, gridIdx.z);
@@ -57,6 +70,10 @@ void mapVerticesToGrid(const MyMesh& mesh, std::unordered_map<GridIndex, std::ve
         maxIdxZ = std::max(maxIdxZ, gridIdx.z);
     }
 
+    std::cout << "[Debug] Current min/max index ranges: "
+              << "X(" << minIdxX << " ~ " << maxIdxX << "), "
+              << "Y(" << minIdxY << " ~ " << maxIdxY << "), "
+              << "Z(" << minIdxZ << " ~ " << maxIdxZ << ")\n";
     std::cout << "[Debug] Finished mapping vertices to grid.\n";
     std::cout << "[Debug] Grid Index Range: X(" << minIdxX << " ~ " << maxIdxX 
               << "), Y(" << minIdxY << " ~ " << maxIdxY 
@@ -70,30 +87,36 @@ void mapVerticesToGrid(const MyMesh& mesh, std::unordered_map<GridIndex, std::ve
     }
 }
 
+// Function to automatically calculate an optimal grid cell size based on the spatial bounds of the mesh
+// it computes the average dimension of the mesh bounding box
 float calculateOptimalGridSize(const MyMesh& mesh) {
+    // Initialize min and max bounds
     OpenMesh::Vec3f minBounds(FLT_MAX, FLT_MAX, FLT_MAX);
     OpenMesh::Vec3f maxBounds(-FLT_MAX, -FLT_MAX, -FLT_MAX);
-
+    // Iterate over each vertex to find the min and max bounds
     for (auto v_it = mesh.vertices_begin(); v_it != mesh.vertices_end(); ++v_it) {
+        // Get the position of current vertex
         OpenMesh::Vec3f point = mesh.point(*v_it);
+        // For each axis, update min and max bounds
         for (int i = 0; i < 3; i++) {
             minBounds[i] = std::min(minBounds[i], point[i]);
             maxBounds[i] = std::max(maxBounds[i], point[i]);
         }
     }
 
+    // Compute the size of bounding box
     float avgSize = (maxBounds[0] - minBounds[0] +
                      maxBounds[1] - minBounds[1] +
                      maxBounds[2] - minBounds[2]) / 3.0f;
-
-    float gridSize = avgSize * 0.05f;  // 메시 크기의 5%를 셀 크기로 설정
+    
+    // Calculate the average isze across all three axes
+    float gridSize = avgSize * 0.05f;  
     std::cout << "[Debug] Auto-Calculated Grid Size: " << gridSize << "\n";
 
     return gridSize;
 }
 
-// 정점 - 지금 경계에 정점 5 미만인 그리드 존재, 나중에 따로 처리하는 로직 구현해야함
-
+/*
 void removeEmptyGrids(std::unordered_map<GridIndex, std::vector<MyMesh::VertexHandle>>& gridMap, 
                       const MyMesh& mesh, int minThreshold) {
     std::cout << "[Debug] Before Removing: " << gridMap.size() << " grids\n";
@@ -105,7 +128,6 @@ void removeEmptyGrids(std::unordered_map<GridIndex, std::vector<MyMesh::VertexHa
         if (vertices.size() < minThreshold) {
             bool hasConnectedFaces = false;
 
-            // 🔹 현재 그리드 정점이 연결된 삼각형 검사
             for (const auto& v : vertices) {
                 if (mesh.valence(v) > 0) { 
                     hasConnectedFaces = true;
@@ -113,7 +135,6 @@ void removeEmptyGrids(std::unordered_map<GridIndex, std::vector<MyMesh::VertexHa
                 }
             }
 
-            // 🔹 연결된 삼각형이 없으면 정점과 함께 삭제
             if (!hasConnectedFaces) {
                 std::cout << "[Debug] Removing Grid (" << it->first.x << ", " 
                           << it->first.y << ", " << it->first.z 
@@ -128,61 +149,81 @@ void removeEmptyGrids(std::unordered_map<GridIndex, std::vector<MyMesh::VertexHa
 
     std::cout << "[Debug] After Removing: " << gridMap.size() << " grids remain\n";
 }
+*/
 
 void extractSubMeshes(const MyMesh& original, 
     const std::unordered_map<GridIndex, std::vector<MyMesh::VertexHandle>>& gridMap, 
     std::unordered_map<GridIndex, MyMesh>& subMeshes,
-    std::unordered_map<GridIndex, MyMesh>& emptySubMeshes) { // ✅ 추가된 emptySubMeshes
+    std::unordered_map<GridIndex, MyMesh>& emptySubMeshes) { 
     std::cout << "[Debug] Extracting submeshes from grids...\n";
 
-    int subMeshCount = 0; 
+    // Counter for vaild submesh
+    int subMeshCount = 0;
+    // Counter for submeshes without faces
     int emptySubMeshCount = 0;
-
+    
+    // Iterate through each grid cell in the grid map
     for (const auto& cell : gridMap) {
         const GridIndex& gridIdx = cell.first;
         const auto& vertices = cell.second;
 
-        MyMesh submesh;
+        MyMesh submesh; // New submesh for the grid
+        // Map to track old vertex handles to new one in submesh
         std::unordered_map<MyMesh::VertexHandle, MyMesh::VertexHandle> vhandleMap;
 
-        // 정점 추가
+        // STEP 1 : Add vertices to submesh
         for (const auto& v : vertices) {
+            // If vertex has not been added yet
             if (vhandleMap.find(v) == vhandleMap.end()) {
+                // Get postion from the orginal mesh
                 OpenMesh::Vec3f point = original.point(v);
+                // Add vertex to submesh
                 MyMesh::VertexHandle new_vhandle = submesh.add_vertex(point);
+                // Map old one to new one
                 vhandleMap[v] = new_vhandle;
             }
         }
 
+        // Track how many faces are added for this submesh
         int faceAddCount = 0;
-        for (const auto& v : vertices) {
-            for (MyMesh::ConstVertexFaceIter vf_it = original.cvf_iter(v); vf_it.is_valid(); ++vf_it) {
-                MyMesh::FaceHandle face = *vf_it;
-                std::vector<MyMesh::VertexHandle> face_vhandles;
 
+        for (const auto& v : vertices) {
+            // Iterate over face connected to vertex v in original mesh
+            for (MyMesh::ConstVertexFaceIter vf_it = original.cvf_iter(v); vf_it.is_valid(); ++vf_it) {
+                // Current face
+                MyMesh::FaceHandle face = *vf_it;
+                // Collect new vertex for face
+                std::vector<MyMesh::VertexHandle> face_vhandles;
+                // Flag to check if all vertices are inside vhandleMap
                 bool validFace = true;
+                
+                // Iterate over vertices of face
                 for (MyMesh::ConstFaceVertexIter fv_it = original.cfv_iter(face); fv_it.is_valid(); ++fv_it) {
+                    // If the vertex is in the submesh, add the new vertex
                     if (vhandleMap.find(*fv_it) != vhandleMap.end()) {
                         face_vhandles.push_back(vhandleMap[*fv_it]);
                     } else {
+                        // At least one vertex is missing in this submesh, skip the face
                         validFace = false;
                         break;
                     }
                 }
-
+                // If all vertices are vaild, and it can be triangle
                 if (validFace && face_vhandles.size() == 3) {
+                    // Add face to submesh
                     MyMesh::FaceHandle newFace = submesh.add_face(face_vhandles);
                     if (newFace.is_valid()) {
                         faceAddCount++;
                     }
                 }
             }
-        }
+            }
 
         std::cout << "[Debug] Submesh for Grid (" << gridIdx.x << ", " << gridIdx.y << ", " << gridIdx.z
                   << ") -> " << submesh.n_vertices() << " vertices, " 
                   << submesh.n_faces() << " faces\n";
-
+        
+        // STEP 3: Map submesh into submeshes map
         if (submesh.n_vertices() > 0) {
             subMeshes[gridIdx] = submesh;
             subMeshCount++;
@@ -190,7 +231,7 @@ void extractSubMeshes(const MyMesh& original,
             if (submesh.n_faces() == 0) {
                 std::cerr << "[Warning] Submesh for Grid (" << gridIdx.x << ", " << gridIdx.y << ", " << gridIdx.z
                           << ") has 0 faces but " << submesh.n_vertices() << " vertices!\n";
-                emptySubMeshes[gridIdx] = submesh; // ✅ 빈 서브메쉬 저장
+                emptySubMeshes[gridIdx] = submesh; 
                 emptySubMeshCount++;
             }
         }
@@ -315,48 +356,7 @@ void integrateSubMeshes(const std::unordered_map<GridIndex, MyMesh>& subMeshes,
     std::cout << "[Debug] Integration Completed!\n";
     std::cout << "[Summary] Skipped Empty Submeshes: " << skippedSubmeshes << "\n";
 
-    // 🔹 최종 병합된 메시 저장 (PLY 파일)
     OpenMesh::IO::write_mesh(finalMesh, "final_integrated_mesh.ply");
     std::cout << "[Saved] Final Integrated Mesh saved as: final_integrated_mesh.ply\n";
 }
 
-void integrateFixedSubMeshes(const std::unordered_map<GridIndex, MyMesh>& fixedSubMeshes, 
-    MyMesh& finalMesh_fixed) {
-    std::cout << "[Debug] Integrating Fixed Submeshes...\n";
-
-    std::unordered_map<MyMesh::VertexHandle, MyMesh::VertexHandle> globalVertexMap;
-    int mergedFaces = 0, mergedVertices = 0;
-
-    for (const auto& [gridIdx, submesh] : fixedSubMeshes) {
-        for (auto v_it = submesh.vertices_begin(); v_it != submesh.vertices_end(); ++v_it) {
-            OpenMesh::Vec3f point = submesh.point(*v_it);
-            MyMesh::VertexHandle new_vhandle = finalMesh_fixed.add_vertex(point);
-            globalVertexMap[*v_it] = new_vhandle;
-            mergedVertices++;
-        }
-
-        for (auto f_it = submesh.faces_begin(); f_it != submesh.faces_end(); ++f_it) {
-            std::vector<MyMesh::VertexHandle> face_vhandles;
-            for (auto fv_it = submesh.cfv_iter(*f_it); fv_it.is_valid(); ++fv_it) {
-                face_vhandles.push_back(globalVertexMap[*fv_it]);
-            }
-
-            if (face_vhandles.size() == 3) {
-                finalMesh_fixed.add_face(face_vhandles);
-                mergedFaces++;
-            } else {
-                std::cerr << "[Warning] Skipping invalid face from Grid (" 
-                          << gridIdx.x << ", " << gridIdx.y << ", " << gridIdx.z 
-                          << ") with " << face_vhandles.size() << " vertices.\n";
-            }
-        }
-    }
-
-    std::cout << "[Debug] Integration of Fixed Submeshes Completed!\n";
-    std::cout << "[Summary] Fixed Submesh Integration Result: " << finalMesh_fixed.n_vertices() 
-              << " vertices, " << finalMesh_fixed.n_faces() << " faces.\n";
-
-    // 🔹 최종 보정된 메시 저장 (PLY 파일)
-    OpenMesh::IO::write_mesh(finalMesh_fixed, "fixed_integrated_mesh.ply");
-    std::cout << "[Saved] Fixed Integrated Mesh saved as: fixed_integrated_mesh.ply\n";
-}
