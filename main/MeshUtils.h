@@ -2,6 +2,7 @@
 #include <OpenMesh/Core/Mesh/TriMesh_ArrayKernelT.hh>
 #include <unordered_map>
 #include <string>
+#include <unordered_set>
 
 // Mesh type definition
 typedef OpenMesh::TriMesh_ArrayKernelT<> MyMesh;
@@ -64,5 +65,11 @@ void integrateSubMeshes(const std::unordered_map<GridIndex, MyMesh>& subMeshes,
     MyMesh& finalMesh, 
     const std::unordered_map<GridIndex, MyMesh>& emptySubMeshes, 
     const std::unordered_map<GridIndex, MyMesh>& fixedSubMeshes);
+
+// New function declaration for seam-fixing submeshes
+//void seamFixSubMeshes(MyMesh& finalMesh, float mergeThreshold);
+void processFailedClusters(const std::unordered_map<GridIndex, std::vector<std::vector<MyMesh::VertexHandle>>>& failedFaceClusters);
+void mergeCloseVerticesInGrid(MyMesh& mesh, float epsilon = 1e-5f);
+void analyzeAndListClusterVertices(const std::unordered_map<GridIndex, std::vector<std::vector<MyMesh::VertexHandle>>>& failedFaceClusters);
 
 #endif // MESHUTILS_H

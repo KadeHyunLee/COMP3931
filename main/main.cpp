@@ -36,7 +36,6 @@ int main() {
     std::cin.get();
     extractSubMeshes(mesh, gridMap, subMeshes, emptySubMeshes);
 
-
     // Perform decimation
     std::cout << "\n[Press SPACE and ENTER to continue...]\n";
     std::cin.get();
@@ -44,10 +43,10 @@ int main() {
 
     // Integrate submeshes (excluding fixed submeshes)
     MyMesh finalMesh;
-    std::unordered_map<GridIndex, MyMesh> fixedSubMeshes; // 🔹 Store fixed submeshes
+    std::unordered_map<GridIndex, MyMesh> fixedSubMeshes; // Store fixed submeshes
     std::cout << "\n[Press SPACE and ENTER to continue...]\n";
     std::cin.get();
-    integrateSubMeshes(subMeshes, finalMesh, emptySubMeshes, fixedSubMeshes); // ✅ Include fixedSubMeshes
+    integrateSubMeshes(subMeshes, finalMesh, emptySubMeshes, fixedSubMeshes); // Include fixedSubMeshes
 
     std::cout << "[Complete] Program finished successfully.\n";
     return 0;

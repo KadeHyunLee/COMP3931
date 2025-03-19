@@ -26,6 +26,7 @@ bool loadMesh(const std::string& filename, MyMesh& mesh) {
     return true;
 }
 
+
 // The point is divided by the grid cell size to determine which cell it belongs to.
 GridIndex computeGridIndex(const OpenMesh::Vec3f& point, float gridSize) {
     GridIndex idx {
@@ -111,52 +112,19 @@ float calculateOptimalGridSize(const MyMesh& mesh) {
                      maxBounds[2] - minBounds[2]) / 3.0f;
     
     // Calculate the average isze across all three axes
-    float gridSize = avgSize * 0.1f;  
+    float gridSize = avgSize * 0.5f;  
     std::cout << "[Debug] Auto-Calculated Grid Size: " << gridSize << "\n";
 
     return gridSize;
 }
 
-/*
-void removeEmptyGrids(std::unordered_map<GridIndex, std::vector<MyMesh::VertexHandle>>& gridMap, 
-                      const MyMesh& mesh, int minThreshold) {
-    std::cout << "[Debug] Before Removing: " << gridMap.size() << " grids\n";
-    
-    auto it = gridMap.begin();
-    while (it != gridMap.end()) {
-        const auto& vertices = it->second;
-
-        if (vertices.size() < minThreshold) {
-            bool hasConnectedFaces = false;
-
-            for (const auto& v : vertices) {
-                if (mesh.valence(v) > 0) { 
-                    hasConnectedFaces = true;
-                    break;
-                }
-            }
-
-            if (!hasConnectedFaces) {
-                std::cout << "[Debug] Removing Grid (" << it->first.x << ", " 
-                          << it->first.y << ", " << it->first.z 
-                          << ") -> " << vertices.size() << " vertices (No Faces Attached)\n";
-
-                it = gridMap.erase(it);
-                continue;
-            }
-        }
-        ++it;
-    }
-
-    std::cout << "[Debug] After Removing: " << gridMap.size() << " grids remain\n";
-}
-*/
 
 void extractSubMeshes(const MyMesh& original, 
     const std::unordered_map<GridIndex, std::vector<MyMesh::VertexHandle>>& gridMap, 
     std::unordered_map<GridIndex, MyMesh>& subMeshes,
     std::unordered_map<GridIndex, MyMesh>& emptySubMeshes) { 
     std::cout << "[Debug] Extracting submeshes from grids...\n";
+    std::unordered_map<GridIndex, std::vector<std::vector<MyMesh::VertexHandle>>> failedFaceClusters;
 
     // Counter for vaild submesh
     int subMeshCount = 0;
@@ -255,8 +223,9 @@ void extractSubMeshes(const MyMesh& original,
                         std::cerr << " - Vertex " << vh.idx() << ": (" 
                                   << pt[0] << ", " << pt[1] << ", " << pt[2] << ")\n";
                     }
-                    //encounteredError = true;
-                    //break;
+                    // Save this failed face cluster
+                    failedFaceClusters[gridIdx].push_back(face_vhandles);
+                    continue;
                 } else {
                     faceAddCount++;
                 }
@@ -277,7 +246,7 @@ void extractSubMeshes(const MyMesh& original,
         if (submesh.n_vertices() > 0) {
             subMeshes[gridIdx] = submesh;
             subMeshCount++;
-
+ 
             if (submesh.n_faces() == 0) {
                 std::cerr << "[Warning] Submesh for Grid (" << gridIdx.x << ", " << gridIdx.y << ", " << gridIdx.z
                           << ") has 0 faces but " << submesh.n_vertices() << " vertices!\n";
@@ -289,6 +258,42 @@ void extractSubMeshes(const MyMesh& original,
 
     std::cout << "[Debug] Extracted " << subMeshCount << " valid submeshes.\n";
     std::cerr << "[Warning] Found " << emptySubMeshCount << " submeshes with 0 faces!\n";
+
+    // After submeshes have been created, identify isolated vertices (not part of any face)
+    for (const auto& [gridIdx, submesh] : subMeshes) {
+        std::unordered_set<int> allVertexIndices;
+        std::unordered_set<int> usedVertexIndices;
+
+        // Collect all vertex indices
+        for (auto v_it = submesh.vertices_begin(); v_it != submesh.vertices_end(); ++v_it) {
+            allVertexIndices.insert(v_it->idx());
+        }
+
+        // Collect vertex indices that are part of faces
+        for (auto f_it = submesh.faces_begin(); f_it != submesh.faces_end(); ++f_it) {
+            for (auto fv_it = submesh.cfv_iter(*f_it); fv_it.is_valid(); ++fv_it) {
+                usedVertexIndices.insert(fv_it->idx());
+            }
+        }
+
+        // Identify isolated vertices
+        std::vector<int> isolatedVertices;
+        for (const int idx : allVertexIndices) {
+            if (usedVertexIndices.find(idx) == usedVertexIndices.end()) {
+                isolatedVertices.push_back(idx);
+            }
+        }
+
+        // Output the isolated vertices
+        if (!isolatedVertices.empty()) {
+            std::cout << "[Info] Grid (" << gridIdx.x << ", " << gridIdx.y << ", " << gridIdx.z
+                      << ") has " << isolatedVertices.size() << " isolated vertices (not part of any face):\n";
+            for (const int idx : isolatedVertices) {
+                const auto& pt = submesh.point(MyMesh::VertexHandle(idx));
+                std::cout << " - Vertex " << idx << " at (" << pt[0] << ", " << pt[1] << ", " << pt[2] << ")\n";
+            }
+        }
+    }
 }
 
 void decimateSubMeshes(std::unordered_map<GridIndex, MyMesh>& subMeshes) {
@@ -361,17 +366,16 @@ void integrateSubMeshes(const std::unordered_map<GridIndex, MyMesh>& subMeshes,
 
     std::unordered_map<MyMesh::VertexHandle, MyMesh::VertexHandle> globalVertexMap;
     int mergedFaces = 0, mergedVertices = 0;
-    int skippedSubmeshes = 0; // 스킵된 서브메쉬 개수
+    int skippedSubmeshes = 0; 
 
     for (const auto& [gridIdx, submesh] : subMeshes) {
-        // ✅ 보정된 서브메쉬(`fixedSubMeshes`)에 포함된 그리드는 스킵
+        
         if (fixedSubMeshes.find(gridIdx) != fixedSubMeshes.end()) {
             std::cout << "[Skip] Skipping fixed submesh from Grid (" 
                       << gridIdx.x << ", " << gridIdx.y << ", " << gridIdx.z << ")\n";
             continue;
         }
 
-        // ✅ 빈 서브메쉬는 메인에서 처리하므로 여기서는 스킵만 함
         if (emptySubMeshes.find(gridIdx) != emptySubMeshes.end()) {
             std::cerr << "[Warning] Skipping empty submesh from Grid (" 
                       << gridIdx.x << ", " << gridIdx.y << ", " << gridIdx.z << ")\n";
@@ -406,7 +410,126 @@ void integrateSubMeshes(const std::unordered_map<GridIndex, MyMesh>& subMeshes,
     std::cout << "[Debug] Integration Completed!\n";
     std::cout << "[Summary] Skipped Empty Submeshes: " << skippedSubmeshes << "\n";
 
+    // Perform seam-fixing after integrating submeshes
+    //seamFixSubMeshes(finalMesh, 5e-4f);
     OpenMesh::IO::write_mesh(finalMesh, "final_integrated_mesh.ply");
     std::cout << "[Saved] Final Integrated Mesh saved as: final_integrated_mesh.ply\n";
 }
 
+
+void processFailedClusters(const std::unordered_map<GridIndex, std::vector<std::vector<MyMesh::VertexHandle>>>& failedFaceClusters) {
+    std::cout << "[PostProcess] Processing failed face clusters...\n";
+    for (const auto& [gridIdx, clusters] : failedFaceClusters) {
+        std::cout << "[PostProcess] Grid (" << gridIdx.x << ", " << gridIdx.y << ", " << gridIdx.z << ") has " << clusters.size() << " failed face clusters.\n";
+        for (const auto& cluster : clusters) {
+            std::cout << " - Cluster with vertices: ";
+            for (const auto& vh : cluster) {
+                std::cout << vh.idx() << " ";
+            }
+            std::cout << "\n";
+        }
+    }
+    std::cout << "[PostProcess] Completed processing failed face clusters.\n";
+}
+
+void analyzeAndListClusterVertices(const std::unordered_map<GridIndex, std::vector<std::vector<MyMesh::VertexHandle>>>& failedFaceClusters) {
+    std::cout << "[ClusterAnalysis] Analyzing and listing unique vertices per grid...\n";
+    
+    for (const auto& [gridIdx, clusters] : failedFaceClusters) {
+        std::unordered_set<int> uniqueVertexIndices;
+
+        for (const auto& cluster : clusters) {
+            std::unordered_set<int> localVertexCheck;
+
+            for (const auto& vh : cluster) {
+                int idx = vh.idx();
+
+                // Intra-cluster duplicate check (silent)
+                if (!localVertexCheck.insert(idx).second) {
+                    continue; // Skip adding duplicate in local list
+                }
+
+                uniqueVertexIndices.insert(idx);
+            }
+        }
+
+        // The uniqueVertexIndices can now be used for further processing if needed.
+    }
+    
+    std::cout << "[ClusterAnalysis] Completed vertex analysis and listing.\n";
+}
+
+void mergeCloseVerticesInGrid(MyMesh& mesh, float epsilon) {
+    std::cout << "[Merge] Merging close vertices and reconstructing faces in submesh (epsilon = " << epsilon << ")...\n";
+    // Final version: merging close vertices and reconstructing faces after merging
+ 
+    std::unordered_map<int, bool> merged;  // track merged vertex indices
+    std::unordered_map<int, MyMesh::VertexHandle> mergeMap;  // map old vertex indices to merged vertex handles
+ 
+    for (auto v_it1 = mesh.vertices_begin(); v_it1 != mesh.vertices_end(); ++v_it1) {
+        if (merged[v_it1->idx()]) continue;
+ 
+        OpenMesh::Vec3f p1 = mesh.point(*v_it1);
+ 
+        for (auto v_it2 = std::next(v_it1); v_it2 != mesh.vertices_end(); ++v_it2) {
+            if (merged[v_it2->idx()]) continue;
+ 
+            OpenMesh::Vec3f p2 = mesh.point(*v_it2);
+            float distance = (p1 - p2).length();
+ 
+            if (distance < epsilon) {
+                // Merge: Update v_it1 position as the average
+                OpenMesh::Vec3f mergedPoint = (p1 + p2) * 0.5f;
+                mesh.set_point(*v_it1, mergedPoint);
+ 
+                merged[v_it2->idx()] = true;
+                mergeMap[v_it2->idx()] = *v_it1;
+                mesh.delete_vertex(*v_it2, false);  // mark for deletion
+            }
+        }
+ 
+        // Ensure self-mapping
+        mergeMap[v_it1->idx()] = *v_it1;
+    }
+ 
+    // Prepare to rebuild faces after garbage collection
+    std::vector<std::vector<MyMesh::VertexHandle>> newFaces;
+ 
+    for (auto f_it = mesh.faces_begin(); f_it != mesh.faces_end(); ++f_it) {
+        std::unordered_set<int> uniqueVerts;
+        std::vector<MyMesh::VertexHandle> face_vhandles;
+ 
+        for (auto fv_it = mesh.cfv_iter(*f_it); fv_it.is_valid(); ++fv_it) {
+            int originalIdx = fv_it->idx();
+            MyMesh::VertexHandle mappedVH = mergeMap[originalIdx];
+ 
+            if (uniqueVerts.insert(mappedVH.idx()).second) {
+                face_vhandles.push_back(mappedVH);
+            }
+        }
+ 
+        // Ensure face is valid (triangle with unique vertices)
+        if (face_vhandles.size() == 3) {
+            newFaces.push_back(face_vhandles);
+        }
+    }
+ 
+    // Delete all old faces
+    std::vector<MyMesh::FaceHandle> facesToDelete;
+    for (auto f_it = mesh.faces_begin(); f_it != mesh.faces_end(); ++f_it) {
+        facesToDelete.push_back(*f_it);
+    }
+ 
+    for (const auto& face : facesToDelete) {
+        mesh.delete_face(face, false);
+    }
+ 
+    mesh.garbage_collection();  // finalize vertex deletion and remove old faces
+ 
+    // Add reconstructed faces
+    for (const auto& vhandles : newFaces) {
+        mesh.add_face(vhandles);
+    }
+ 
+    std::cout << "[Merge] Completed merging vertices and reconstructing faces.\n";
+}
