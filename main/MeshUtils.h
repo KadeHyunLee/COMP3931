@@ -25,11 +25,12 @@ namespace std {
 
     template <>
     // Hash function for OpenMesh::Vec3f
-    struct hash<OpenMesh::Vec3f> {
-        size_t operator()(const OpenMesh::Vec3f& v) const noexcept {
-            size_t h1 = hash<float>()(v[0]);
-            size_t h2 = hash<float>()(v[1]);
-            size_t h3 = hash<float>()(v[2]);
+    struct hash<std::tuple<int, int, int>> {
+        size_t operator()(const std::tuple<int, int, int>& key) const noexcept {
+            auto [x, y, z] = key;
+            size_t h1 = std::hash<int>()(x);
+            size_t h2 = std::hash<int>()(y);
+            size_t h3 = std::hash<int>()(z);
             return h1 ^ (h2 << 1) ^ (h3 << 2);
         }
     };
@@ -47,10 +48,6 @@ void mapVerticesToGrid(const MyMesh& mesh, std::unordered_map<GridIndex, std::ve
 // Automatically calculate an optimal grid size based on mesh dimensions
 float calculateOptimalGridSize(const MyMesh& mesh);
 
-// Remove grids that have fewer vertices than a given threshold or no connected faces
-//void removeEmptyGrids(std::unordered_map<GridIndex, std::vector<MyMesh::VertexHandle>>& gridMap, 
-//                     const MyMesh& mesh, int minThreshold);
-
 // Extract submeshes from original mesh
 void extractSubMeshes(const MyMesh& original, 
     const std::unordered_map<GridIndex, std::vector<MyMesh::VertexHandle>>& gridMap, 
@@ -60,16 +57,14 @@ void extractSubMeshes(const MyMesh& original,
 // Perform decimation on submeshes to reduce face count and optimize geometry
 void decimateSubMeshes(std::unordered_map<GridIndex, MyMesh>& subMeshes);
 
+std::vector<MyMesh::VertexHandle> findBoundaryVertices(const MyMesh& mesh);
+
+void seamFixBoundaryVertices(MyMesh& mesh, float mergeThreshold);
+
 // Integrate all submeshes into a single final mesh (optionally excluding fixed submeshes)
 void integrateSubMeshes(const std::unordered_map<GridIndex, MyMesh>& subMeshes, 
     MyMesh& finalMesh, 
     const std::unordered_map<GridIndex, MyMesh>& emptySubMeshes, 
     const std::unordered_map<GridIndex, MyMesh>& fixedSubMeshes);
-
-// New function declaration for seam-fixing submeshes
-//void seamFixSubMeshes(MyMesh& finalMesh, float mergeThreshold);
-void processFailedClusters(const std::unordered_map<GridIndex, std::vector<std::vector<MyMesh::VertexHandle>>>& failedFaceClusters);
-void mergeCloseVerticesInGrid(MyMesh& mesh, float epsilon = 1e-5f);
-void analyzeAndListClusterVertices(const std::unordered_map<GridIndex, std::vector<std::vector<MyMesh::VertexHandle>>>& failedFaceClusters);
 
 #endif // MESHUTILS_H

@@ -3,7 +3,7 @@
 
 int main() {
     MyMesh mesh;
-    std::string filename = "data/bun000_clean.ply";
+    std::string filename = "data/big grid.ply";
 
     //  Load mesh
     std::cout << "\n[Press SPACE and ENTER to continue...]\n";
@@ -23,11 +23,6 @@ int main() {
     std::cin.get();
     mapVerticesToGrid(mesh, gridMap, gridSize);
 
-    // Remove empty grids
-    //std::cout << "\n[Press SPACE and ENTER to continue...]\n";
-    //std::cin.get();
-    //removeEmptyGrids(gridMap, mesh, 5);
-
     // Extract submeshes
     std::unordered_map<GridIndex, MyMesh> subMeshes;
     std::unordered_map<GridIndex, MyMesh> emptySubMeshes;
@@ -41,7 +36,7 @@ int main() {
     std::cin.get();
     decimateSubMeshes(subMeshes);
 
-    // Integrate submeshes (excluding fixed submeshes)
+    // Integrate submeshes 
     MyMesh finalMesh;
     std::unordered_map<GridIndex, MyMesh> fixedSubMeshes; // Store fixed submeshes
     std::cout << "\n[Press SPACE and ENTER to continue...]\n";
