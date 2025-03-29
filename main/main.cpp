@@ -1,9 +1,26 @@
 #include "MeshUtils.h"
 #include <iostream>
 
-int main() {
+int main(int argc, char ** argv) {
+    std::string filename;
+    
+    if (argc >= 2) {
+        filename = std::string("data/") + argv[1];
+    } else {
+        std::cout << "[Input] Enter mesh filename (inside data/): ";
+        std::string userInput;
+        std::cin >> userInput;
+        filename = std::string("data/") + userInput;
+    }
+    
+    // Try loading the mesh, allow retry if failed
     MyMesh mesh;
-    std::string filename = "data/big grid.ply";
+    while (!loadMesh(filename, mesh)) {
+        std::cout << "[Retry] Enter another mesh filename (inside data/): ";
+        std::string userInput;
+        std::cin >> userInput;
+        filename = std::string("data/") + userInput;
+    }
 
     //  Load mesh
     std::cout << "\n[Press SPACE and ENTER to continue...]\n";

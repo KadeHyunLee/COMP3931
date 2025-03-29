@@ -2,6 +2,7 @@
 #include <OpenMesh/Core/IO/MeshIO.hh>
 #include <OpenMesh/Tools/Decimater/DecimaterT.hh>
 #include <OpenMesh/Tools/Decimater/ModQuadricT.hh>
+#include <OpenMesh/Tools/Decimater/ModAspectRatioT.hh>
 #include <iostream>
 #include <unordered_set>
 
@@ -112,7 +113,7 @@ float calculateOptimalGridSize(const MyMesh& mesh) {
                      maxBounds[2] - minBounds[2]) / 3.0f;
     
     // Calculate the average isze across all three axes
-    float gridSize = avgSize * 0.5f;  
+    float gridSize = avgSize * 0.2f;  
     std::cout << "[Debug] Auto-Calculated Grid Size: " << gridSize << "\n";
 
     return gridSize;
@@ -232,6 +233,13 @@ void decimateSubMeshes(std::unordered_map<GridIndex, MyMesh>& subMeshes) {
             std::cerr << "[Error] Failed to add Decimation module!\n";
             return;
         }
+
+        OpenMesh::Decimater::ModAspectRatioT<MyMesh>::Handle modAspect;
+        if (!decimater.add(modAspect)) {
+            std::cerr << "[Error] Failed to add Aspect Ratio module!\n";
+            return;
+        }
+        decimater.module(modAspect).set_aspect_ratio(4.0); // Rejects triangles worse than 1:5 ratio
 
         decimater.initialize();
         auto& modQuadricRef = decimater.module(modQuadric);
