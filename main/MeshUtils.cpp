@@ -35,85 +35,91 @@ GridIndex computeGridIndex(const OpenMesh::Vec3f& point, float gridSize) {
         static_cast<int>(point[1] / gridSize),// Compute grid index along Y-axis
         static_cast<int>(point[2] / gridSize)// Compute grid index along Z-axis
     };
-    /*std::cout << "[Debug] Computed GridIndex(" << idx.x << ", " << idx.y << ", " << idx.z
-              << ") from point (" << point[0] << ", " << point[1] << ", " << point[2]
-              << ") with gridSize " << gridSize << "\n";
-              */
+
     return idx;
 }
 
 // Function to map each vertex of the mesh into its corresponding grid cell.
 void mapVerticesToGrid(const MyMesh& mesh, std::unordered_map<GridIndex, std::vector<MyMesh::VertexHandle>>& gridMap, float gridSize) {
+    // Debug: Start mapping vertices to grid
     std::cout << "[Debug] Mapping vertices to grid...\n";
+    // Debug: Output total number of vertices in the mesh
     std::cout << "[Debug] Total vertices in mesh: " << mesh.n_vertices() << "\n";
 
-    // Initialize min and max indices to track the range of grid cells used
-    int minIdxX = INT_MAX, minIdxY = INT_MAX, minIdxZ = INT_MAX;
-    int maxIdxX = INT_MIN, maxIdxY = INT_MIN, maxIdxZ = INT_MIN;
-
-    // Iterate over each vertex in the mesh
-    for (auto v_it = mesh.vertices_begin(); v_it != mesh.vertices_end(); ++v_it) {
-        // Get 3D Position of the current vertex
-        OpenMesh::Vec3f point = mesh.point(*v_it);
-        // Compute gridcell to belong points
-        GridIndex gridIdx = computeGridIndex(point, gridSize);
-
-        // Add the current vertex handle to the corresponding grid cell
-        gridMap[gridIdx].push_back(*v_it);
-        //std::cout << "[Debug] Added vertex handle " << (*v_it).idx()
-          //        << " to GridIndex(" << gridIdx.x << ", " << gridIdx.y << ", " << gridIdx.z << ")\n";
-
-        // Track the minimum and maximum indices in X, Y, Z
-        minIdxX = std::min(minIdxX, gridIdx.x);
-        minIdxY = std::min(minIdxY, gridIdx.y);
-        minIdxZ = std::min(minIdxZ, gridIdx.z);
-
-        maxIdxX = std::max(maxIdxX, gridIdx.x);
-        maxIdxY = std::max(maxIdxY, gridIdx.y);
-        maxIdxZ = std::max(maxIdxZ, gridIdx.z);
-    }
-
-    std::cout << "[Debug] Current min/max index ranges: "
-              << "X(" << minIdxX << " ~ " << maxIdxX << "), "
-              << "Y(" << minIdxY << " ~ " << maxIdxY << "), "
-              << "Z(" << minIdxZ << " ~ " << maxIdxZ << ")\n";
-    std::cout << "[Debug] Finished mapping vertices to grid.\n";
-    std::cout << "[Debug] Grid Index Range: X(" << minIdxX << " ~ " << maxIdxX 
-              << "), Y(" << minIdxY << " ~ " << maxIdxY 
-              << "), Z(" << minIdxZ << " ~ " << maxIdxZ << ")\n";
+    // Mutex to protect shared gridMap during merging from parallel threads
+    std::mutex gridMapMutex;
     
-    std::cout << "[Debug] Grid Distribution: \n";
-    for (const auto& cell : gridMap) {
-        std::cout << "  Grid (" << cell.first.x << ", " 
-                << cell.first.y << ", " << cell.first.z 
-                << ") -> " << cell.second.size() << " vertices\n";
+    // Begin OpenMP parallel region to process vertices concurrently
+    #pragma omp parallel
+    {
+        // Each thread maintains its own private map to collect vertex handles per grid cell
+        std::unordered_map<GridIndex, std::vector<MyMesh::VertexHandle>> privateGridMap;
+
+        // Distribute the vertex loop among threads using OpenMP for directive
+        #pragma omp for
+        for (int i = 0; i < mesh.n_vertices(); ++i) {
+            // Retrieve vertex handle for current index
+            auto vertex = MyMesh::VertexHandle(i);
+            // Get the 3D position of the vertex
+            OpenMesh::Vec3f point = mesh.point(vertex);
+            // Compute the corresponding grid cell index for the vertex
+            GridIndex gridIdx = computeGridIndex(point, gridSize);
+            // Add the vertex handle to this thread's local map for the computed grid cell
+            privateGridMap[gridIdx].push_back(vertex);
+        }
+
+        // Enter critical section to merge the private map into the shared gridMap safely
+        #pragma omp critical
+        {
+            // Iterate over each grid cell in the thread's private map
+            for (const auto& [gridIdx, verts] : privateGridMap) {
+                // Lock the shared gridMap using a lock_guard for thread safety
+                std::lock_guard<std::mutex> lock(gridMapMutex);
+                // Merge the vertex handles from the local map into the global gridMap for this grid cell
+                gridMap[gridIdx].insert(gridMap[gridIdx].end(), verts.begin(), verts.end());
+            }
+        }
     }
 }
 
 // Function to automatically calculate an optimal grid cell size based on the spatial bounds of the mesh
 // it computes the average dimension of the mesh bounding box
 float calculateOptimalGridSize(const MyMesh& mesh) {
-    // Initialize min and max bounds
-    OpenMesh::Vec3f minBounds(FLT_MAX, FLT_MAX, FLT_MAX);
-    OpenMesh::Vec3f maxBounds(-FLT_MAX, -FLT_MAX, -FLT_MAX);
-    // Iterate over each vertex to find the min and max bounds
-    for (auto v_it = mesh.vertices_begin(); v_it != mesh.vertices_end(); ++v_it) {
-        // Get the position of current vertex
-        OpenMesh::Vec3f point = mesh.point(*v_it);
-        // For each axis, update min and max bounds
-        for (int i = 0; i < 3; i++) {
-            minBounds[i] = std::min(minBounds[i], point[i]);
-            maxBounds[i] = std::max(maxBounds[i], point[i]);
+    // Initialize thread-local min and max bounds
+    OpenMesh::Vec3f globalMin(FLT_MAX, FLT_MAX, FLT_MAX);
+    OpenMesh::Vec3f globalMax(-FLT_MAX, -FLT_MAX, -FLT_MAX);
+
+    // Parallel reduction using OpenMP
+    #pragma omp parallel
+    {
+        OpenMesh::Vec3f localMin(FLT_MAX, FLT_MAX, FLT_MAX);
+        OpenMesh::Vec3f localMax(-FLT_MAX, -FLT_MAX, -FLT_MAX);
+
+        #pragma omp for nowait
+        for (int i = 0; i < mesh.n_vertices(); ++i) {
+            OpenMesh::Vec3f point = mesh.point(MyMesh::VertexHandle(i));
+            for (int j = 0; j < 3; ++j) {
+                localMin[j] = std::min(localMin[j], point[j]);
+                localMax[j] = std::max(localMax[j], point[j]);
+            }
+        }
+
+        // Merge local results into global bounds
+        #pragma omp critical
+        {
+            for (int j = 0; j < 3; ++j) {
+                globalMin[j] = std::min(globalMin[j], localMin[j]);
+                globalMax[j] = std::max(globalMax[j], localMax[j]);
+            }
         }
     }
 
-    // Compute the size of bounding box
-    float avgSize = (maxBounds[0] - minBounds[0] +
-                     maxBounds[1] - minBounds[1] +
-                     maxBounds[2] - minBounds[2]) / 3.0f;
-    
-    // Calculate the average isze across all three axes
-    float gridSize = avgSize * 0.2f;  
+    // Compute average bounding box size
+    float avgSize = (globalMax[0] - globalMin[0] +
+                     globalMax[1] - globalMin[1] +
+                     globalMax[2] - globalMin[2]) / 3.0f;
+
+    float gridSize = avgSize * 0.2f;
     std::cout << "[Debug] Auto-Calculated Grid Size: " << gridSize << "\n";
 
     return gridSize;
@@ -125,6 +131,7 @@ void extractSubMeshes(const MyMesh& original,
     std::unordered_map<GridIndex, MyMesh>& emptySubMeshes) {
 
     std::cout << "[Debug] Extracting submeshes (face-centric)...\n";
+
     float gridSize = calculateOptimalGridSize(original);
 
     std::unordered_map<GridIndex, MyMesh> localSubMeshes;
@@ -132,47 +139,51 @@ void extractSubMeshes(const MyMesh& original,
 
     for (auto f_it = original.faces_begin(); f_it != original.faces_end(); ++f_it) {
         MyMesh::FaceHandle face = *f_it;
-
         std::vector<MyMesh::VertexHandle> originalVHs;
         OpenMesh::Vec3f faceCenter(0, 0, 0);
 
+        // 정점 수집 및 중심 계산
         for (auto fv_it = original.cfv_iter(face); fv_it.is_valid(); ++fv_it) {
             originalVHs.push_back(*fv_it);
             faceCenter += original.point(*fv_it);
         }
 
-        if (originalVHs.size() != 3) continue;
+        if (originalVHs.size() != 3) continue; // 삼각형이 아닌 경우 무시
         faceCenter /= 3.0f;
 
+        // 격자 위치 계산
         GridIndex gridIdx = computeGridIndex(faceCenter, gridSize);
         auto& submesh = localSubMeshes[gridIdx];
         auto& vhandleMap = localVertexMaps[gridIdx];
 
         std::vector<MyMesh::VertexHandle> submeshVHs;
-        std::unordered_set<int> unique;
+        std::unordered_set<int> uniqueIndices;
 
+        // 정점을 서브메쉬에 매핑
         for (const auto& vh : originalVHs) {
             if (vhandleMap.find(vh) == vhandleMap.end()) {
                 vhandleMap[vh] = submesh.add_vertex(original.point(vh));
             }
             auto newVH = vhandleMap[vh];
             submeshVHs.push_back(newVH);
-            unique.insert(newVH.idx());
+            uniqueIndices.insert(newVH.idx());
         }
 
-        if (submeshVHs.size() == 3 && unique.size() == 3) {
-            auto p0 = submesh.point(submeshVHs[0]);
-            auto p1 = submesh.point(submeshVHs[1]);
-            auto p2 = submesh.point(submeshVHs[2]);
-            float area = OpenMesh::cross(p1 - p0, p2 - p0).norm() * 0.5f;
+        // 중복 정점이 있는 삼각형은 제외
+        if (submeshVHs.size() != 3 || uniqueIndices.size() != 3) continue;
 
-            if (area > 1e-8f) {
-                submesh.add_face(submeshVHs);
-            }
+        // 면적이 0에 가까운 삼각형도 제외
+        auto p0 = submesh.point(submeshVHs[0]);
+        auto p1 = submesh.point(submeshVHs[1]);
+        auto p2 = submesh.point(submeshVHs[2]);
+        float area = OpenMesh::cross(p1 - p0, p2 - p0).norm() * 0.5f;
+
+        if (area > 1e-8f) {
+            submesh.add_face(submeshVHs);
         }
     }
 
-    // Copy results to output
+    // 결과 정리
     for (auto& [gridIdx, mesh] : localSubMeshes) {
         if (mesh.n_faces() > 0) {
             subMeshes[gridIdx] = mesh;
@@ -266,7 +277,6 @@ void decimateSubMeshes(std::unordered_map<GridIndex, MyMesh>& subMeshes) {
         }
     }
     
-
     std::cout << "=============================\n";
     std::cout << "[Summary] Decimation Completed!\n";
     std::cout << " - Total Faces Before: " << totalFacesBefore << "\n";
