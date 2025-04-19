@@ -55,7 +55,7 @@ void extractSubMeshes(const MyMesh& original,
     std::unordered_map<GridIndex, MyMesh>& emptySubMeshes); 
 
 // Perform decimation on submeshes to reduce face count and optimize geometry
-void decimateSubMeshes(std::unordered_map<GridIndex, MyMesh>& subMeshes);
+void decimateSubMeshes(std::unordered_map<GridIndex, MyMesh>& subMeshes, float decimationRatio);
 
 std::vector<MyMesh::VertexHandle> findBoundaryVertices(const MyMesh& mesh);
 

@@ -46,8 +46,15 @@ void mapVerticesToGrid(const MyMesh& mesh, std::unordered_map<GridIndex, std::ve
     // Debug: Output total number of vertices in the mesh
     std::cout << "[Debug] Total vertices in mesh: " << mesh.n_vertices() << "\n";
 
-    // Mutex to protect shared gridMap during merging from parallel threads
+    // Mutex map for per-grid locking
     std::mutex gridMapMutex;
+    
+    // Pre-initialize mutexes to avoid concurrent insertion
+    for (int i = 0; i < mesh.n_vertices(); ++i) {
+        auto vertex = MyMesh::VertexHandle(i);
+        OpenMesh::Vec3f point = mesh.point(vertex);
+        GridIndex gridIdx = computeGridIndex(point, gridSize);
+    }
     
     // Begin OpenMP parallel region to process vertices concurrently
     #pragma omp parallel
@@ -67,15 +74,11 @@ void mapVerticesToGrid(const MyMesh& mesh, std::unordered_map<GridIndex, std::ve
             // Add the vertex handle to this thread's local map for the computed grid cell
             privateGridMap[gridIdx].push_back(vertex);
         }
-
-        // Enter critical section to merge the private map into the shared gridMap safely
         #pragma omp critical
         {
-            // Iterate over each grid cell in the thread's private map
+            // Merge the private map into the shared gridMap with locking
             for (const auto& [gridIdx, verts] : privateGridMap) {
-                // Lock the shared gridMap using a lock_guard for thread safety
                 std::lock_guard<std::mutex> lock(gridMapMutex);
-                // Merge the vertex handles from the local map into the global gridMap for this grid cell
                 gridMap[gridIdx].insert(gridMap[gridIdx].end(), verts.begin(), verts.end());
             }
         }
@@ -85,34 +88,25 @@ void mapVerticesToGrid(const MyMesh& mesh, std::unordered_map<GridIndex, std::ve
 // Function to automatically calculate an optimal grid cell size based on the spatial bounds of the mesh
 // it computes the average dimension of the mesh bounding box
 float calculateOptimalGridSize(const MyMesh& mesh) {
-    // Initialize thread-local min and max bounds
-    OpenMesh::Vec3f globalMin(FLT_MAX, FLT_MAX, FLT_MAX);
-    OpenMesh::Vec3f globalMax(-FLT_MAX, -FLT_MAX, -FLT_MAX);
+    // Separate variables for reduction (OpenMP doesn't support Vec3f directly)
+    float minX = FLT_MAX, minY = FLT_MAX, minZ = FLT_MAX;
+    float maxX = -FLT_MAX, maxY = -FLT_MAX, maxZ = -FLT_MAX;
 
-    // Parallel reduction using OpenMP
-    #pragma omp parallel
-    {
-        OpenMesh::Vec3f localMin(FLT_MAX, FLT_MAX, FLT_MAX);
-        OpenMesh::Vec3f localMax(-FLT_MAX, -FLT_MAX, -FLT_MAX);
+    #pragma omp parallel for reduction(min:minX, minY, minZ) reduction(max:maxX, maxY, maxZ)
+    for (int i = 0; i < mesh.n_vertices(); ++i) {
+        OpenMesh::Vec3f point = mesh.point(MyMesh::VertexHandle(i));
+        minX = std::min(minX, point[0]);
+        minY = std::min(minY, point[1]);
+        minZ = std::min(minZ, point[2]);
 
-        #pragma omp for nowait
-        for (int i = 0; i < mesh.n_vertices(); ++i) {
-            OpenMesh::Vec3f point = mesh.point(MyMesh::VertexHandle(i));
-            for (int j = 0; j < 3; ++j) {
-                localMin[j] = std::min(localMin[j], point[j]);
-                localMax[j] = std::max(localMax[j], point[j]);
-            }
-        }
-
-        // Merge local results into global bounds
-        #pragma omp critical
-        {
-            for (int j = 0; j < 3; ++j) {
-                globalMin[j] = std::min(globalMin[j], localMin[j]);
-                globalMax[j] = std::max(globalMax[j], localMax[j]);
-            }
-        }
+        maxX = std::max(maxX, point[0]);
+        maxY = std::max(maxY, point[1]);
+        maxZ = std::max(maxZ, point[2]);
     }
+
+    // Create global min/max vectors
+    OpenMesh::Vec3f globalMin(minX, minY, minZ);
+    OpenMesh::Vec3f globalMax(maxX, maxY, maxZ);
 
     // Compute average bounding box size
     float avgSize = (globalMax[0] - globalMin[0] +
@@ -129,61 +123,115 @@ void extractSubMeshes(const MyMesh& original,
     const std::unordered_map<GridIndex, std::vector<MyMesh::VertexHandle>>& gridMap,
     std::unordered_map<GridIndex, MyMesh>& subMeshes,
     std::unordered_map<GridIndex, MyMesh>& emptySubMeshes) {
+    
+    std::unordered_map<GridIndex, std::mutex> submeshLocks;
+    for (const auto& [gridIdx, _] : gridMap) {
+        submeshLocks[gridIdx];  // Ensure mutex exists for each grid index
+    }
 
-    std::cout << "[Debug] Extracting submeshes (face-centric)...\n";
+    std::cout << "[Debug] Extracting submeshes (face-centric with OpenMP)...\n";
 
     float gridSize = calculateOptimalGridSize(original);
 
-    std::unordered_map<GridIndex, MyMesh> localSubMeshes;
-    std::unordered_map<GridIndex, std::unordered_map<MyMesh::VertexHandle, MyMesh::VertexHandle>> localVertexMaps;
-
+    std::vector<MyMesh::FaceHandle> allFaces;
     for (auto f_it = original.faces_begin(); f_it != original.faces_end(); ++f_it) {
-        MyMesh::FaceHandle face = *f_it;
-        std::vector<MyMesh::VertexHandle> originalVHs;
-        OpenMesh::Vec3f faceCenter(0, 0, 0);
+        allFaces.push_back(*f_it);
+    }
 
-        // 정점 수집 및 중심 계산
-        for (auto fv_it = original.cfv_iter(face); fv_it.is_valid(); ++fv_it) {
-            originalVHs.push_back(*fv_it);
-            faceCenter += original.point(*fv_it);
-        }
+    std::unordered_map<GridIndex, MyMesh> localSubMeshes;
+    std::unordered_map<GridIndex, std::unordered_map<std::tuple<int, int, int>, MyMesh::VertexHandle>> globalVertexMaps;
 
-        if (originalVHs.size() != 3) continue; // 삼각형이 아닌 경우 무시
-        faceCenter /= 3.0f;
+    static constexpr float posEpsilon = 1e-6f;
 
-        // 격자 위치 계산
-        GridIndex gridIdx = computeGridIndex(faceCenter, gridSize);
-        auto& submesh = localSubMeshes[gridIdx];
-        auto& vhandleMap = localVertexMaps[gridIdx];
+    #pragma omp parallel
+    {
+        std::unordered_map<GridIndex, MyMesh> threadSubMeshes;
+        std::unordered_map<GridIndex, std::unordered_map<std::tuple<int, int, int>, MyMesh::VertexHandle>> threadVertexMaps;
 
-        std::vector<MyMesh::VertexHandle> submeshVHs;
-        std::unordered_set<int> uniqueIndices;
+        auto hashVec = [](const OpenMesh::Vec3f& v) {
+            return std::make_tuple(
+                static_cast<int>(v[0] / posEpsilon),
+                static_cast<int>(v[1] / posEpsilon),
+                static_cast<int>(v[2] / posEpsilon)
+            );
+        };
 
-        // 정점을 서브메쉬에 매핑
-        for (const auto& vh : originalVHs) {
-            if (vhandleMap.find(vh) == vhandleMap.end()) {
-                vhandleMap[vh] = submesh.add_vertex(original.point(vh));
+        #pragma omp for schedule(dynamic)
+        for (int i = 0; i < static_cast<int>(allFaces.size()); ++i) {
+            MyMesh::FaceHandle face = allFaces[i];
+            std::vector<MyMesh::VertexHandle> originalVHs;
+            OpenMesh::Vec3f faceCenter(0, 0, 0);
+
+            for (auto fv_it = original.cfv_iter(face); fv_it.is_valid(); ++fv_it) {
+                originalVHs.push_back(*fv_it);
+                faceCenter += original.point(*fv_it);
             }
-            auto newVH = vhandleMap[vh];
-            submeshVHs.push_back(newVH);
-            uniqueIndices.insert(newVH.idx());
+
+            if (originalVHs.size() != 3) continue;
+            faceCenter /= 3.0f;
+
+            GridIndex gridIdx = computeGridIndex(faceCenter, gridSize);
+            auto& submesh = threadSubMeshes[gridIdx];
+            auto& vhandleMap = threadVertexMaps[gridIdx];
+
+            std::vector<MyMesh::VertexHandle> submeshVHs;
+            std::unordered_set<int> uniqueIndices;
+
+            for (const auto& vh : originalVHs) {
+                OpenMesh::Vec3f point = original.point(vh);
+                auto key = hashVec(point);
+                if (vhandleMap.find(key) == vhandleMap.end()) {
+                    vhandleMap[key] = submesh.add_vertex(point);
+                }
+                auto newVH = vhandleMap[key];
+                submeshVHs.push_back(newVH);
+                uniqueIndices.insert(newVH.idx());
+            }
+
+            if (submeshVHs.size() != 3 || uniqueIndices.size() != 3) continue;
+
+            auto p0 = submesh.point(submeshVHs[0]);
+            auto p1 = submesh.point(submeshVHs[1]);
+            auto p2 = submesh.point(submeshVHs[2]);
+            float area = OpenMesh::cross(p1 - p0, p2 - p0).norm() * 0.5f;
+
+            if (area > 1e-8f) {
+                submesh.add_face(submeshVHs);
+            }
         }
 
-        // 중복 정점이 있는 삼각형은 제외
-        if (submeshVHs.size() != 3 || uniqueIndices.size() != 3) continue;
+        for (auto& [gridIdx, mesh] : threadSubMeshes) {
+            std::lock_guard<std::mutex> lock(submeshLocks[gridIdx]);
+            if (localSubMeshes.find(gridIdx) == localSubMeshes.end()) {
+                localSubMeshes[gridIdx] = mesh;
+                globalVertexMaps[gridIdx] = threadVertexMaps[gridIdx];
+            } else {
+                auto& dst = localSubMeshes[gridIdx];
+                auto& globalMap = globalVertexMaps[gridIdx];
 
-        // 면적이 0에 가까운 삼각형도 제외
-        auto p0 = submesh.point(submeshVHs[0]);
-        auto p1 = submesh.point(submeshVHs[1]);
-        auto p2 = submesh.point(submeshVHs[2]);
-        float area = OpenMesh::cross(p1 - p0, p2 - p0).norm() * 0.5f;
+                std::unordered_map<MyMesh::VertexHandle, MyMesh::VertexHandle> handleMap;
+                for (auto v_it = mesh.vertices_begin(); v_it != mesh.vertices_end(); ++v_it) {
+                    OpenMesh::Vec3f point = mesh.point(*v_it);
+                    auto key = hashVec(point);
 
-        if (area > 1e-8f) {
-            submesh.add_face(submeshVHs);
+                    if (globalMap.find(key) == globalMap.end()) {
+                        globalMap[key] = dst.add_vertex(point);
+                    }
+
+                    handleMap[*v_it] = globalMap[key];
+                }
+
+                for (auto f_it = mesh.faces_begin(); f_it != mesh.faces_end(); ++f_it) {
+                    std::vector<MyMesh::VertexHandle> vhs;
+                    for (auto fv_it = mesh.cfv_iter(*f_it); fv_it.is_valid(); ++fv_it) {
+                        vhs.push_back(handleMap[*fv_it]);
+                    }
+                    dst.add_face(vhs);
+                }
+            }
         }
     }
 
-    // 결과 정리
     for (auto& [gridIdx, mesh] : localSubMeshes) {
         if (mesh.n_faces() > 0) {
             subMeshes[gridIdx] = mesh;
@@ -196,70 +244,68 @@ void extractSubMeshes(const MyMesh& original,
     std::cerr << "[Warning] Found " << emptySubMeshes.size() << " empty submeshes.\n";
 }
 
-void decimateSubMeshes(std::unordered_map<GridIndex, MyMesh>& subMeshes) {
-    std::cout << "[Debug] Number of Submeshes: " << subMeshes.size() << "\n";
-    std::cout << "[Debug] Performing Decimation on Submeshes...\n";
+void decimateSubMeshes(std::unordered_map<GridIndex, MyMesh>& subMeshes, float decimationRatio) {
+    //std::cout << "[Debug] Number of Submeshes: " << subMeshes.size() << "\n";
+    //std::cout << "[Debug] Performing Decimation on Submeshes...\n";
 
     int totalFacesBefore = 0;
     int totalVerticesBefore = 0;
     int totalFacesAfter = 0;
     int totalVerticesAfter = 0;
 
-    for (auto& [gridIdx, submesh] : subMeshes) {
-        std::cout << "[Debug] Processing Submesh at Grid (" << gridIdx.x << ", " << gridIdx.y << ", " << gridIdx.z << ")\n";
-        std::cout << " - Vertices: " << submesh.n_vertices() << ", Faces: " << submesh.n_faces() << "\n";
+    // Convert keys to indexable vector for parallel iteration
+    std::vector<GridIndex> gridIndices;
+    for (const auto& [gridIdx, _] : subMeshes) {
+        gridIndices.push_back(gridIdx);
+    }
+
+    #pragma omp parallel for reduction(+:totalFacesBefore, totalVerticesBefore, totalFacesAfter, totalVerticesAfter)
+    for (int i = 0; i < static_cast<int>(gridIndices.size()); ++i) {
+        GridIndex gridIdx = gridIndices[i];
+        auto& submesh = subMeshes[gridIdx];
+
+        //std::cout << "[Debug] Processing Submesh at Grid (" << gridIdx.x << ", " << gridIdx.y << ", " << gridIdx.z << ")\n";
+        //std::cout << " - Vertices: " << submesh.n_vertices() << ", Faces: " << submesh.n_faces() << "\n";
+
         int facesBefore = submesh.n_faces();
-        if (facesBefore <= 3) {
-            std::cout << "[Skip] Skipping Decimation for small Submesh at Grid ("
-                      << gridIdx.x << ", " << gridIdx.y << ", " << gridIdx.z
-                      << ") with " << facesBefore << " faces\n";
+        if (facesBefore <= 3 || facesBefore == 0) {
+            std::cout << "[Skip] Skipping Submesh at Grid (" << gridIdx.x << ", " << gridIdx.y << ", " << gridIdx.z << ")\n";
             continue;
         }
+
         int verticesBefore = submesh.n_vertices();
-        
+
         totalFacesBefore += facesBefore;
         totalVerticesBefore += verticesBefore;
- 
-        if (facesBefore == 0) {
-            std::cout << "[Skip] Skipping Decimation for empty Submesh at Grid (" 
-                      << gridIdx.x << ", " << gridIdx.y << ", " << gridIdx.z << ")\n";
-            continue;
-        }
 
         submesh.request_vertex_status();
         submesh.request_halfedge_status();
         for (auto he_it = submesh.halfedges_begin(); he_it != submesh.halfedges_end(); ++he_it) {
             if (submesh.is_boundary(*he_it)) {
-                auto from = submesh.from_vertex_handle(*he_it);
-                auto to = submesh.to_vertex_handle(*he_it);
-                submesh.status(from).set_locked(true);
-                submesh.status(to).set_locked(true);
+                submesh.status(submesh.from_vertex_handle(*he_it)).set_locked(true);
+                submesh.status(submesh.to_vertex_handle(*he_it)).set_locked(true);
             }
         }
 
         OpenMesh::Decimater::DecimaterT<MyMesh> decimater(submesh);
         OpenMesh::Decimater::ModQuadricT<MyMesh>::Handle modQuadric;
-
-        if (!decimater.add(modQuadric)) {
-            std::cerr << "[Error] Failed to add Decimation module!\n";
-            return;
-        }
-
         OpenMesh::Decimater::ModAspectRatioT<MyMesh>::Handle modAspect;
-        if (!decimater.add(modAspect)) {
-            std::cerr << "[Error] Failed to add Aspect Ratio module!\n";
-            return;
+
+        if (!decimater.add(modQuadric) || !decimater.add(modAspect)) {
+            std::cerr << "[Error] Failed to add decimation module!\n";
+            continue;
         }
-        decimater.module(modAspect).set_aspect_ratio(4.0); // Rejects triangles worse than 1:5 ratio
+        // Optional: Set aspect ratio constraint if needed
+        // decimater.module(modAspect).set_aspect_ratio(4.0);
+ 
+        // Dynamically adjust maximum error tolerance based on decimation ratio
+        float dynamicErr = (1.0f - decimationRatio) * 0.15f;
+        int target_faces = std::max(static_cast<int>(facesBefore * decimationRatio), 3);
+        decimater.module(modQuadric).set_max_err(dynamicErr);
 
         decimater.initialize();
-        auto& modQuadricRef = decimater.module(modQuadric);
-        double maxError = facesBefore > 100 ? 1e-3 : 1e-5;
-        modQuadricRef.set_max_err(maxError);
 
-        int target_faces = std::max(static_cast<int>(facesBefore * 0.3), 3);
         decimater.decimate_to_faces(target_faces);
-        std::cout << "[Debug] Decimation complete for Grid (" << gridIdx.x << ", " << gridIdx.y << ", " << gridIdx.z << ")\n";
         submesh.garbage_collection();
 
         int facesAfter = submesh.n_faces();
@@ -267,144 +313,115 @@ void decimateSubMeshes(std::unordered_map<GridIndex, MyMesh>& subMeshes) {
 
         totalFacesAfter += facesAfter;
         totalVerticesAfter += verticesAfter;
-
-        std::cout << "[Debug] Decimated Submesh at Grid (" << gridIdx.x << ", " << gridIdx.y << ", " << gridIdx.z
-                  << ") -> " << facesAfter << " faces remaining (Before: " << facesBefore << " faces, "
-                  << "Vertices: " << verticesBefore << " → " << verticesAfter << ")\n";
-
-        if (facesBefore == facesAfter) {
-            std::cerr << "[Warning] No faces were removed during Decimation! Check Decimation settings.\n";
-        }
     }
-    
-    std::cout << "=============================\n";
+
     std::cout << "[Summary] Decimation Completed!\n";
     std::cout << " - Total Faces Before: " << totalFacesBefore << "\n";
     std::cout << " - Total Faces After: " << totalFacesAfter << "\n";
     std::cout << " - Total Vertices Before: " << totalVerticesBefore << "\n";
     std::cout << " - Total Vertices After: " << totalVerticesAfter << "\n";
-    std::cout << "=============================\n";
+
+    float faceReductionRate = 100.0f * (1.0f - static_cast<float>(totalFacesAfter) / totalFacesBefore);
+    float vertexReductionRate = 100.0f * (1.0f - static_cast<float>(totalVerticesAfter) / totalVerticesBefore);
+    
+    std::cout << " - Face Reduction Rate: " << faceReductionRate << "%\n";
+    std::cout << " - Vertex Reduction Rate: " << vertexReductionRate << "%\n";
+    std::cout << " - Target Decimation Ratio: " << decimationRatio << "\n";
 }
 
-std::vector<MyMesh::VertexHandle> findBoundaryVertices(const MyMesh& mesh) {
-    std::vector<MyMesh::VertexHandle> boundaryVertices;
-
-    for (auto v_it = mesh.vertices_begin(); v_it != mesh.vertices_end(); ++v_it) {
-        if (mesh.is_boundary(*v_it)) {
-            boundaryVertices.push_back(*v_it);
-        }
-    }
-
-    std::cout << "[Debug] Found " << boundaryVertices.size() << " boundary vertices.\n";
-    return boundaryVertices;
-}
-
-void seamFixBoundaryVertices(MyMesh& mesh, float mergeThreshold) {
-    std::cout << "[Debug] Seam Fixing (Boundary Vertices) Started...\n";
-
-    auto boundaryVertices = findBoundaryVertices(mesh);
-
-    int mergeCount = 0;
-
-    for (size_t i = 0; i < boundaryVertices.size(); ++i) {
-        for (size_t j = i + 1; j < boundaryVertices.size(); ++j) {
-            OpenMesh::Vec3f p1 = mesh.point(boundaryVertices[i]);
-            OpenMesh::Vec3f p2 = mesh.point(boundaryVertices[j]);
-            float distance = (p1 - p2).length();
-
-            if (distance < mergeThreshold) {
-                mesh.set_point(boundaryVertices[j], p1);
-                mergeCount++;
-            }
-        }
-    }
-
-    std::cout << "[Debug] Seam Fixing Completed! Boundary vertices merged: " << mergeCount << "\n";
-
-    mesh.garbage_collection();
-}
 
 void integrateSubMeshes(const std::unordered_map<GridIndex, MyMesh>& subMeshes, 
     MyMesh& finalMesh, 
     const std::unordered_map<GridIndex, MyMesh>& emptySubMeshes, 
-    const std::unordered_map<GridIndex, MyMesh>& fixedSubMeshes) { 
+    const std::unordered_map<GridIndex, MyMesh>& fixedSubMeshes) {
+
     std::cout << "[Debug] Integrating Submeshes...\n";
 
-    std::unordered_map<MyMesh::VertexHandle, MyMesh::VertexHandle> globalVertexMap;
-    int mergedFaces = 0, mergedVertices = 0;
-    int skippedSubmeshes = 0; 
+    std::atomic<int> mergedFaces{0}, mergedVertices{0}, skippedSubmeshes{0};
+    std::mutex finalMeshMutex;
 
-    for (const auto& [gridIdx, submesh] : subMeshes) {
-        
-        if (fixedSubMeshes.find(gridIdx) != fixedSubMeshes.end()) {
+    static constexpr float posEpsilon = 1e-6f;
+    auto hashVec = [](const OpenMesh::Vec3f& v) {
+        return std::make_tuple(
+            std::round(v[0] / posEpsilon),
+            std::round(v[1] / posEpsilon),
+            std::round(v[2] / posEpsilon)
+        );
+    };
+
+    std::vector<GridIndex> keys;
+    for (const auto& [gridIdx, _] : subMeshes) {
+        keys.push_back(gridIdx);
+    }
+
+    #pragma omp parallel for
+    for (int i = 0; i < static_cast<int>(keys.size()); ++i) {
+        const auto& gridIdx = keys[i];
+        const auto& submesh = subMeshes.at(gridIdx);
+
+        if (fixedSubMeshes.count(gridIdx)) {
             std::cout << "[Skip] Skipping fixed submesh from Grid (" 
                       << gridIdx.x << ", " << gridIdx.y << ", " << gridIdx.z << ")\n";
             continue;
         }
 
-        if (emptySubMeshes.find(gridIdx) != emptySubMeshes.end()) {
+        if (emptySubMeshes.count(gridIdx)) {
             std::cerr << "[Warning] Skipping empty submesh from Grid (" 
                       << gridIdx.x << ", " << gridIdx.y << ", " << gridIdx.z << ")\n";
             skippedSubmeshes++;
             continue;
         }
 
-        static constexpr float posEpsilon = 1e-6f;
-        auto hashVec = [](const OpenMesh::Vec3f& v) {
-            return std::make_tuple(
-                std::round(v[0] / posEpsilon),
-                std::round(v[1] / posEpsilon),
-                std::round(v[2] / posEpsilon)
-            );
-        };
+        std::unordered_map<std::tuple<int,int,int>, MyMesh::VertexHandle> positionMap;
+        std::unordered_map<MyMesh::VertexHandle, MyMesh::VertexHandle> localMap;
 
-        std::unordered_map<std::tuple<int, int, int>, MyMesh::VertexHandle> positionMap;
+        std::vector<std::pair<OpenMesh::Vec3f, MyMesh::VertexHandle>> newVertices;
+        std::vector<std::vector<MyMesh::VertexHandle>> newFaces;
 
         for (auto v_it = submesh.vertices_begin(); v_it != submesh.vertices_end(); ++v_it) {
             OpenMesh::Vec3f point = submesh.point(*v_it);
             auto key = hashVec(point);
 
-            MyMesh::VertexHandle new_vhandle;
-
-            auto it = positionMap.find(key);
-            if (it != positionMap.end()) {
-                new_vhandle = it->second;
-            } else {
-                new_vhandle = finalMesh.add_vertex(point);
-                positionMap[key] = new_vhandle;
+            if (positionMap.count(key) == 0) {
+                MyMesh::VertexHandle newVH;
+                {
+                    std::lock_guard<std::mutex> lock(finalMeshMutex);
+                    newVH = finalMesh.add_vertex(point);
+                }
+                positionMap[key] = newVH;
+                newVertices.emplace_back(point, newVH);
                 mergedVertices++;
             }
 
-            globalVertexMap[*v_it] = new_vhandle;
+            localMap[*v_it] = positionMap[key];
         }
 
         for (auto f_it = submesh.faces_begin(); f_it != submesh.faces_end(); ++f_it) {
-            std::vector<MyMesh::VertexHandle> face_vhandles;
+            std::vector<MyMesh::VertexHandle> vhs;
             for (auto fv_it = submesh.cfv_iter(*f_it); fv_it.is_valid(); ++fv_it) {
-                face_vhandles.push_back(globalVertexMap[*fv_it]);
+                vhs.push_back(localMap[*fv_it]);
             }
 
-            if (face_vhandles.size() == 3) {
-                finalMesh.add_face(face_vhandles);
+            if (vhs.size() == 3) {
+                {
+                    std::lock_guard<std::mutex> lock(finalMeshMutex);
+                    finalMesh.add_face(vhs);
+                }
                 mergedFaces++;
             } else {
                 std::cerr << "[Warning] Skipping invalid face from Grid (" 
                           << gridIdx.x << ", " << gridIdx.y << ", " << gridIdx.z 
-                          << ") with " << face_vhandles.size() << " vertices.\n";
+                          << ") with " << vhs.size() << " vertices.\n";
             }
         }
     }
 
     std::cout << "[Debug] Integration Completed!\n";
-    std::cout << "[Summary] Skipped Empty Submeshes: " << skippedSubmeshes << "\n";
-
-    // Perform seam-fixing after integrating submeshes
-    // seamFixBoundaryVertices(finalMesh, 1e-5f);
+    std::cout << "[Summary] Skipped Empty Submeshes: " << skippedSubmeshes.load() << "\n";
 
     OpenMesh::IO::write_mesh(finalMesh, "final_integrated_mesh.ply");
     std::cout << "[Saved] Final Integrated Mesh saved as: final_integrated_mesh.ply\n";
 }
-
 
 
 
