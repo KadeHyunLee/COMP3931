@@ -13,16 +13,15 @@ void MeshIntegrator::integrate(
     const std::unordered_map<GridIndex, MyMesh>& subMeshes,
     MyMesh& finalMesh,
     const std::unordered_map<GridIndex, MyMesh>& emptySubMeshes,
-    const std::unordered_map<GridIndex, MyMesh>& fixedSubMeshes)
+    const std::unordered_map<GridIndex, MyMesh>& fixedSubMeshes,
+    float posEpsilon)
 {
     std::cout << "[Debug] Integrating Submeshes...\n";
 
     std::atomic<int> mergedFaces{0}, mergedVertices{0}, skippedSubmeshes{0};
     std::mutex finalMeshMutex;
 
-    static constexpr float posEpsilon = 1e-6f;
-    
-    auto hashVec = [](const OpenMesh::Vec3f& v) {
+    auto hashVec = [&](const OpenMesh::Vec3f& v) {
         return std::make_tuple(
             std::round(v[0] / posEpsilon),
             std::round(v[1] / posEpsilon),

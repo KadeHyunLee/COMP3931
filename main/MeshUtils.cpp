@@ -48,8 +48,20 @@ float calculateOptimalGridSize(const MyMesh& mesh) {
 }
 
 
+float computeDynamicEpsilon(const MyMesh& mesh) {
+    if (mesh.n_vertices() == 0) return 1e-6f;
 
+    OpenMesh::Vec3f minPt = mesh.point(*mesh.vertices_begin());
+    OpenMesh::Vec3f maxPt = minPt;
 
+    for (auto v_it = mesh.vertices_begin(); v_it != mesh.vertices_end(); ++v_it) {
+        OpenMesh::Vec3f p = mesh.point(*v_it);
+        for (int i = 0; i < 3; ++i) {
+            minPt[i] = std::min(minPt[i], p[i]);
+            maxPt[i] = std::max(maxPt[i], p[i]);
+        }
+    }
 
-
-
+    float diagonal = (maxPt - minPt).length();
+    return diagonal * 1e-4f;
+}

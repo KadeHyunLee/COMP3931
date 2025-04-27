@@ -51,13 +51,16 @@ void MeshPipelineController::runPipeline() {
     partitioner.mapVertices(mesh, gridMap);
 
     std::unordered_map<GridIndex, MyMesh> subMeshes, emptySubMeshes;
-    SubmeshExtractor::extract(mesh, gridMap, subMeshes, emptySubMeshes);
+    float posEpsilon;
+    SubmeshExtractor::extract(mesh, gridMap, subMeshes, emptySubMeshes, posEpsilon);
 
     SubmeshDecimator::decimate(subMeshes, decimationRatio);
 
+    //improveBoundaryIfNeeded(subMeshes);
+
     MyMesh finalMesh;
     std::unordered_map<GridIndex, MyMesh> fixedSubMeshes;
-    MeshIntegrator::integrate(subMeshes, finalMesh, emptySubMeshes, fixedSubMeshes);
+    MeshIntegrator::integrate(subMeshes, finalMesh, emptySubMeshes, fixedSubMeshes, posEpsilon);
 
     std::cout << "[Complete] Pipeline finished successfully.\n";
 }
@@ -67,6 +70,7 @@ void MeshPipelineController::runPipelineInTesting() {
     std::string filename;
     float decimationRatio;
     int threadCount;
+    float posEpsilon; 
     
     std::cout << "[Input] Enter mesh filename (inside data/): ";
     std::string userInput;
@@ -99,21 +103,22 @@ void MeshPipelineController::runPipelineInTesting() {
 
     auto start = std::chrono::high_resolution_clock::now();
     float gridSize = calculateOptimalGridSize(mesh);
+    auto end = std::chrono::high_resolution_clock::now();
+    std::cout << "[Timing] Grid Size: " << gridSize << ", Time: " 
+    << std::chrono::duration_cast<std::chrono::milliseconds>(end - start).count() << " ms\n";
+
     GridPartitioner partitioner(gridSize);
 
     std::unordered_map<GridIndex, std::vector<MyMesh::VertexHandle>> gridMap;
     start = std::chrono::high_resolution_clock::now();
     partitioner.mapVertices(mesh, gridMap);
-    auto end = std::chrono::high_resolution_clock::now();
+    end = std::chrono::high_resolution_clock::now();
     std::cout << "[Timing] Vertex Mapping took "
-              << std::chrono::duration_cast<std::chrono::milliseconds>(end - start).count() << " ms\n";
-
-    std::cout << "[Timing] Grid Size: " << gridSize << ", Time: " 
               << std::chrono::duration_cast<std::chrono::milliseconds>(end - start).count() << " ms\n";
 
     std::unordered_map<GridIndex, MyMesh> submeshes, emptySubmeshes;
     start = std::chrono::high_resolution_clock::now();
-    SubmeshExtractor::extract(mesh, gridMap, submeshes, emptySubmeshes);
+    SubmeshExtractor::extract(mesh, gridMap, submeshes, emptySubmeshes,posEpsilon);
     end = std::chrono::high_resolution_clock::now();
     std::cout << "[Timing] Submesh Extraction took "
               << std::chrono::duration_cast<std::chrono::milliseconds>(end - start).count() << " ms\n";
@@ -124,13 +129,24 @@ void MeshPipelineController::runPipelineInTesting() {
     std::cout << "[Timing] Decimation took "
               << std::chrono::duration_cast<std::chrono::milliseconds>(end - start).count() << " ms\n";
 
+    //improveBoundaryIfNeeded(submeshes);
+
     MyMesh finalMesh;
     std::unordered_map<GridIndex, MyMesh> fixedSubMeshes;
     start = std::chrono::high_resolution_clock::now();
-    MeshIntegrator::integrate(submeshes, finalMesh, emptySubmeshes, fixedSubMeshes);
+    MeshIntegrator::integrate(submeshes, finalMesh, emptySubmeshes, fixedSubMeshes,posEpsilon);
     end = std::chrono::high_resolution_clock::now();
     std::cout << "[Timing] Integration took "
               << std::chrono::duration_cast<std::chrono::milliseconds>(end - start).count() << " ms\n";
 
     std::cout << "[Complete] Testing pipeline finished.\n";
 }
+
+/*
+void MeshPipelineController::improveBoundaryIfNeeded(std::unordered_map<GridIndex, MyMesh>& subMeshes) {
+    if (improveQuality_) {
+        SubmeshDecimator decimator;
+        decimator.improveBoundary(subMeshes);
+    }
+}
+*/

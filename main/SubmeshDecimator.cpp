@@ -75,3 +75,4 @@ void SubmeshDecimator::decimate(std::unordered_map<GridIndex, MyMesh>& subMeshes
     std::cout << " - Vertex Reduction: " << vertexRate << "%\n";
     std::cout << " - Target Decimation Ratio: " << decimationRatio << "\n";
 }
+

@@ -40,5 +40,6 @@ namespace std {
 
 // Automatically calculate an optimal grid size based on mesh dimensions
 float calculateOptimalGridSize(const MyMesh& mesh);
+float computeDynamicEpsilon(const MyMesh& mesh);
 
 #endif // MESHUTILS_H

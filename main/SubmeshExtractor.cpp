@@ -11,7 +11,8 @@
 void SubmeshExtractor::extract(const MyMesh& original,
     const std::unordered_map<GridIndex, std::vector<MyMesh::VertexHandle>>& gridMap,
     std::unordered_map<GridIndex, MyMesh>& subMeshes,
-    std::unordered_map<GridIndex, MyMesh>& emptySubMeshes)
+    std::unordered_map<GridIndex, MyMesh>& emptySubMeshes,
+    float& outposEpsilon)
 {
     std::cout << "[Debug] Extracting submeshes (face-centric with OpenMP)...\n";
 
@@ -26,14 +27,15 @@ void SubmeshExtractor::extract(const MyMesh& original,
     std::unordered_map<GridIndex, std::unordered_map<std::tuple<int, int, int>, MyMesh::VertexHandle>> globalVertexMaps;
 
     std::vector<std::tuple<GridIndex, MyMesh, std::unordered_map<std::tuple<int,int,int>, MyMesh::VertexHandle>>> mergeQueue;
-    static constexpr float posEpsilon = 1e-6f;
+    outposEpsilon = computeDynamicEpsilon(original);
+    float posEpsilon = outposEpsilon;
 
     #pragma omp parallel
     {
         std::unordered_map<GridIndex, MyMesh> threadSubMeshes;
         std::unordered_map<GridIndex, std::unordered_map<std::tuple<int, int, int>, MyMesh::VertexHandle>> threadVertexMaps;
 
-        auto hashVec = [](const OpenMesh::Vec3f& v) {
+        auto hashVec = [posEpsilon](const OpenMesh::Vec3f& v) {
             return std::make_tuple(
                 static_cast<int>(v[0] / posEpsilon),
                 static_cast<int>(v[1] / posEpsilon),
@@ -93,7 +95,7 @@ void SubmeshExtractor::extract(const MyMesh& original,
         }
     }
 
-    auto hashVec = [](const OpenMesh::Vec3f& v) {
+    auto hashVec = [posEpsilon](const OpenMesh::Vec3f& v) {
         return std::make_tuple(
             static_cast<int>(v[0] / posEpsilon),
             static_cast<int>(v[1] / posEpsilon),

@@ -59,6 +59,7 @@
         "unordered_map": "cpp",
         "valarray": "cpp",
         "variant": "cpp",
-        "vector": "cpp"
+        "vector": "cpp",
+        "unordered_set": "cpp"
     }
 }
