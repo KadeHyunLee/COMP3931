@@ -23,7 +23,7 @@ This project implements a parallel 3D mesh simplification pipeline using uniform
 ## Execution 
 
 1.Download test model
-https://leeds365-my.sharepoint.com/:u:/r/personal/sc22cl_leeds_ac_uk/Documents/meshmodel.zip?csf=1&web=1&e=fgArhi
+https://leeds365-my.sharepoint.com/:u:/g/personal/sc22cl_leeds_ac_uk/EcFzkak9L_pMjvd49F1Cb9wBN-aoY-2mRl80i0oEh3Nx_A?e=hIyn0g
 
 2. Please move the file to data foldera and unzip the compressed file in the directory before running
 
