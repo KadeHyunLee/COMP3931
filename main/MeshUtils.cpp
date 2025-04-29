@@ -5,7 +5,10 @@
 #include <OpenMesh/Tools/Decimater/ModAspectRatioT.hh>
 #include <iostream>
 #include <unordered_set>
-#include <omp.h> 
+
+#ifdef _OPENMP
+#include <omp.h>
+#endif
 
 using std::cout;
 using std::cerr;

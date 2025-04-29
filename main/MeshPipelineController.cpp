@@ -18,10 +18,10 @@ void MeshPipelineController::runPipeline() {
     std::string filename;
     float decimationRatio;
     
-    std::cout << "[Input] Enter mesh filename (inside data/): ";
+    std::cout << "[Input] Enter mesh filename (inside datamodel/): ";
     std::string userInput;
     std::cin >> userInput;
-    filename = std::string("data/") + userInput;
+    filename = std::string("data/meshmodel/") + userInput;
 
     std::cout << "[Input] Enter decimation ratio (e.g., 0.3): ";
     std::cin >> decimationRatio;
