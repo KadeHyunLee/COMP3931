@@ -2,6 +2,7 @@
 #include <OpenMesh/Core/IO/MeshIO.hh>
 #include <iostream>
 
+// From OpenMesh documentation
 bool MeshLoader::load(const std::string& filename, MyMesh& mesh) {
     if (!OpenMesh::IO::read_mesh(mesh, filename)) {
         std::cerr << "[Error] Failed to load mesh: " << filename << "\n";

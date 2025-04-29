@@ -8,6 +8,7 @@
 #include <omp.h>
 #endif
 
+// This code is based on OpenMesh documentation
 void SubmeshDecimator::decimate(std::unordered_map<GridIndex, MyMesh>& subMeshes, float decimationRatio) {
     int totalFacesBefore = 0, totalVerticesBefore = 0;
     int totalFacesAfter = 0, totalVerticesAfter = 0;
@@ -35,7 +36,8 @@ void SubmeshDecimator::decimate(std::unordered_map<GridIndex, MyMesh>& subMeshes
 
         submesh.request_vertex_status();
         submesh.request_halfedge_status();
-
+        
+        // This code is based on OpenMesh Code
         for (auto he_it = submesh.halfedges_begin(); he_it != submesh.halfedges_end(); ++he_it) {
             if (submesh.is_boundary(*he_it)) {
                 submesh.status(submesh.from_vertex_handle(*he_it)).set_locked(true);

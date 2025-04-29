@@ -8,6 +8,7 @@
 #include <omp.h>
 #endif
 
+
 void SubmeshExtractor::extract(const MyMesh& original,
     const std::unordered_map<GridIndex, std::vector<MyMesh::VertexHandle>>& gridMap,
     std::unordered_map<GridIndex, MyMesh>& subMeshes,
@@ -43,7 +44,9 @@ void SubmeshExtractor::extract(const MyMesh& original,
             );
         };
 
+        // based on OpenMP documentation
         #pragma omp for schedule(dynamic)
+        // face centric Algorithm
         for (int i = 0; i < static_cast<int>(allFaces.size()); ++i) {
             auto face = allFaces[i];
             std::vector<MyMesh::VertexHandle> originalVHs;

@@ -14,14 +14,13 @@ using std::cout;
 using std::cerr;
 using std::endl;
 
-
-// Function to automatically calculate an optimal grid cell size based on the spatial bounds of the mesh
-// it computes the average dimension of the mesh bounding box
+// Hash function for GridIndex
 float calculateOptimalGridSize(const MyMesh& mesh) {
-    // Separate variables for reduction (OpenMP doesn't support Vec3f directly)
+    // Separate variables for reduction 
     float minX = FLT_MAX, minY = FLT_MAX, minZ = FLT_MAX;
     float maxX = -FLT_MAX, maxY = -FLT_MAX, maxZ = -FLT_MAX;
 
+    // Based on OpenMP Documentation 
     #pragma omp parallel for reduction(min:minX, minY, minZ) reduction(max:maxX, maxY, maxZ)
     for (int i = 0; i < mesh.n_vertices(); ++i) {
         OpenMesh::Vec3f point = mesh.point(MyMesh::VertexHandle(i));
@@ -43,6 +42,8 @@ float calculateOptimalGridSize(const MyMesh& mesh) {
                      globalMax[1] - globalMin[1] +
                      globalMax[2] - globalMin[2]) / 3.0f;
 
+
+    // 0.2f was decided based on experimetal results
     float gridSize = avgSize * 0.2f;
 
     std::cout << "[Debug] Auto-Calculated Grid Size: " << gridSize << "\n";
@@ -54,17 +55,17 @@ float calculateOptimalGridSize(const MyMesh& mesh) {
 float computeDynamicEpsilon(const MyMesh& mesh) {
     if (mesh.n_vertices() == 0) return 1e-6f;
 
-    OpenMesh::Vec3f minPt = mesh.point(*mesh.vertices_begin());
-    OpenMesh::Vec3f maxPt = minPt;
+    OpenMesh::Vec3f min = mesh.point(*mesh.vertices_begin());
+    OpenMesh::Vec3f max = min;
 
     for (auto v_it = mesh.vertices_begin(); v_it != mesh.vertices_end(); ++v_it) {
         OpenMesh::Vec3f p = mesh.point(*v_it);
         for (int i = 0; i < 3; ++i) {
-            minPt[i] = std::min(minPt[i], p[i]);
-            maxPt[i] = std::max(maxPt[i], p[i]);
+            min[i] = std::min(min[i], p[i]);
+            max[i] = std::max(max[i], p[i]);
         }
     }
 
-    float diagonal = (maxPt - minPt).length();
+    float diagonal = (max - min).length();
     return diagonal * 1e-4f;
 }

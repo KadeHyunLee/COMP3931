@@ -17,7 +17,7 @@ struct GridIndex {
     }
 };
 
-// Hash function definitions (for use with unordered_map)
+// Hash function definitions
 namespace std {
     template<> struct hash<GridIndex> {
         size_t operator()(const GridIndex& g) const {
@@ -26,7 +26,7 @@ namespace std {
     };
 
     template <>
-    // Hash function for OpenMesh::Vec3f
+    // Hash function 
     struct hash<std::tuple<int, int, int>> {
         size_t operator()(const std::tuple<int, int, int>& key) const noexcept {
             auto [x, y, z] = key;

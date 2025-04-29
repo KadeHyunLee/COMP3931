@@ -21,6 +21,7 @@ void MeshIntegrator::integrate(
     std::atomic<int> mergedFaces{0}, mergedVertices{0}, skippedSubmeshes{0};
     std::mutex finalMeshMutex;
 
+    // Hash function
     auto hashVec = [&](const OpenMesh::Vec3f& v) {
         return std::make_tuple(
             std::round(v[0] / posEpsilon),
@@ -55,8 +56,8 @@ void MeshIntegrator::integrate(
         std::unordered_map<std::tuple<int,int,int>, MyMesh::VertexHandle> positionMap;
         std::unordered_map<MyMesh::VertexHandle, MyMesh::VertexHandle> localMap;
 
-        for (auto v_it = submesh.vertices_begin(); v_it != submesh.vertices_end(); ++v_it) {
-            OpenMesh::Vec3f point = submesh.point(*v_it);
+        for (auto vertex_it = submesh.vertices_begin(); vertex_it != submesh.vertices_end(); ++vertex_it) {
+            OpenMesh::Vec3f point = submesh.point(*vertex_it);
             auto key = hashVec(point);
 
             if (positionMap.count(key) == 0) {
@@ -69,12 +70,12 @@ void MeshIntegrator::integrate(
                 mergedVertices++;
             }
 
-            localMap[*v_it] = positionMap[key];
+            localMap[*vertex_it] = positionMap[key];
         }
 
-        for (auto f_it = submesh.faces_begin(); f_it != submesh.faces_end(); ++f_it) {
+        for (auto face_it = submesh.faces_begin(); face_it != submesh.faces_end(); ++face_it) {
             std::vector<MyMesh::VertexHandle> vhs;
-            for (auto fv_it = submesh.cfv_iter(*f_it); fv_it.is_valid(); ++fv_it) {
+            for (auto fv_it = submesh.cfv_iter(*face_it); fv_it.is_valid(); ++fv_it) {
                 vhs.push_back(localMap[*fv_it]);
             }
 

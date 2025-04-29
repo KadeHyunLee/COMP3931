@@ -20,7 +20,8 @@ void GridPartitioner::mapVertices(const MyMesh& mesh,
 
     std::cout << "[Debug] Mapping vertices to grid...\n";
     std::cout << "[Debug] Total vertices in mesh: " << mesh.n_vertices() << "\n";
-
+    
+    // From OpenMP documentation
     std::mutex gridMapMutex;
 
     #pragma omp parallel
